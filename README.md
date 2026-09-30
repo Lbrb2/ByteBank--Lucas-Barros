@@ -1,8 +1,8 @@
 # ByteBank
 
-Sistema bancário desenvolvido em Python como Projeto Avaliativo (AV2) da disciplina BD015 - Algoritmo e Estrutura de Dados, CESAR School.
+Sistema bancário desenvolvido em Python como Projeto Avaliativo (AV1) da disciplina BD015 - Algoritmo e Estrutura de Dados, CESAR School.
 
-**Squad:** Lucas Barreto Rodrigues de Barros
+**Squad:** Lucas Barreto Rodrigues de Barros e Felipe Saraiva
 
 **Professor:** Fernando Ferreira de Carvalho
 
