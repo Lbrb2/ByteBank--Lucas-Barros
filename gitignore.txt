@@ -1,0 +1,16 @@
+# Arquivos de dados gerados em tempo de execução
+dados_bytebank.json
+contas.txt
+contas_teste.txt
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+
+# Ambientes virtuais
+venv/
+.venv/
+
+# Editores
+.vscode/
+.idea/

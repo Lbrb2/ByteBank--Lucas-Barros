@@ -6,7 +6,8 @@ from formatacao import formatar_reais, formatar_numero, linha_separadora, linha_
 from conta import Conta, CATEGORIA_PADRAO, TAMANHO_PIN
 from transacao import Transacao
 from open_banking import Diretorio, ESCOPOS
-from datetime import datetime
+from datetime import datetime, timedelta
+import heapq
 
 
 class Banco:
@@ -462,18 +463,25 @@ class Banco:
 
     # ---------------- Fila de boletos (FIFO) ----------------
 
-    def agendar_boleto(self, conta, descricao, valor, categoria=CATEGORIA_PADRAO):
+    def agendar_boleto(self, conta, descricao, valor,
+                       categoria=CATEGORIA_PADRAO, dias_para_vencer=30):
         if valor <= 0:
             return False, "[RECUSADO] O valor do boleto deve ser positivo."
+        if dias_para_vencer < 0:
+            return False, "[RECUSADO] O prazo de vencimento não pode ser negativo."
+
+        vencimento = (datetime.now() + timedelta(days=dias_para_vencer))
         self.fila_boletos.append({
             "conta": conta.numero,
             "descricao": descricao,
             "valor": valor,
-            "categoria": categoria
+            "categoria": categoria,
+            "vencimento": vencimento.isoformat(timespec="seconds"),
         })
         self.registrar(conta, "agendar_boleto", f"{descricao} - {formatar_reais(valor)}")
         return True, (f"[OK] Boleto '{descricao}' de {formatar_reais(valor)} agendado.\n"
-                      f"Categoria: {categoria}")
+                      f"Categoria: {categoria}\n"
+                      f"Vencimento: {vencimento.strftime('%d/%m/%Y')}")
 
     def fila_formatada(self):
         linhas = [linha_titulo("Fila de Boletos Agendados")]
@@ -482,7 +490,8 @@ class Banco:
         else:
             for posicao, boleto in enumerate(self.fila_boletos, start=1):
                 linhas.append(f"  {posicao}º - Conta {boleto['conta']}: "
-                              f"{boleto['descricao']} - {formatar_reais(boleto['valor'])}")
+                              f"{boleto['descricao']} - {formatar_reais(boleto['valor'])} "
+                              f"| vence {Banco.vencimento_formatado(boleto)}")
         linhas.append(linha_separadora())
         return "\n".join(linhas)
 
@@ -521,6 +530,69 @@ class Banco:
             linhas.append(linha_titulo(f"{len(pendentes)} boleto(s) continuam pendentes na fila"))
         else:
             linhas.append(linha_titulo("Fila de boletos finalizada"))
+        return True, "\n".join(linhas)
+
+    @staticmethod
+    def vencimento_formatado(boleto):
+        vencimento = boleto.get("vencimento")
+        if not vencimento:
+            return "sem data"
+        return datetime.fromisoformat(vencimento).strftime("%d/%m/%Y")
+
+    @staticmethod
+    def chave_vencimento(boleto):
+        """Boletos sem data vão para o fim da ordenação por urgência."""
+        return boleto.get("vencimento") or "9999-12-31T23:59:59"
+
+    def processar_boletos_por_vencimento(self):
+        """Processa os boletos do mais urgente ao menos urgente.
+
+        Usa uma fila de prioridade (heap binário). Diferente da fila FIFO, que
+        respeita a ordem de chegada, aqui a saída é sempre o boleto de menor
+        vencimento — independentemente de quando foi agendado.
+
+        O heap mantém o menor elemento na raiz, então cada retirada custa
+        O(log n) em vez de O(n) de uma busca pelo menor a cada passo.
+        """
+        if not self.fila_boletos:
+            return False, "Não há boletos agendados na fila."
+
+        heap = []
+        for ordem, boleto in enumerate(self.fila_boletos):
+            # a ordem entra como desempate, para vencimentos iguais manterem
+            # a ordem de chegada (e para o heap nunca comparar dicionários)
+            heapq.heappush(heap, (Banco.chave_vencimento(boleto), ordem, boleto))
+
+        linhas = [linha_titulo("Processando boletos por vencimento (mais urgente primeiro)")]
+        pendentes = []
+
+        while heap:
+            _, _, boleto = heapq.heappop(heap)
+            conta = self.buscar_por_numero(boleto["conta"])
+            vencimento = Banco.vencimento_formatado(boleto)
+
+            if conta is None:
+                linhas.append(f"[ERRO] Conta {boleto['conta']} não encontrada. Boleto descartado.")
+                continue
+
+            sucesso, mensagem = conta.pagar_boleto(boleto["descricao"], boleto["valor"],
+                                                   boleto.get("categoria", CATEGORIA_PADRAO))
+            if not sucesso:
+                pendentes.append(boleto)
+                linhas.append(f"[PENDENTE] {boleto['descricao']} (vence {vencimento}): "
+                              f"{mensagem.replace('[RECUSADO] ', '')} O boleto continua na fila.")
+                continue
+
+            self.registrar(conta, "pagar_boleto_agendado",
+                           f"{boleto['descricao']} - {formatar_reais(boleto['valor'])}")
+            linhas.append(f"[PAGO] {boleto['descricao']} - {formatar_reais(boleto['valor'])} "
+                          f"| vencia {vencimento} | conta {conta.numero}")
+
+        self.fila_boletos = pendentes
+        if pendentes:
+            linhas.append(linha_titulo(f"{len(pendentes)} boleto(s) continuam pendentes"))
+        else:
+            linhas.append(linha_titulo("Todos os boletos foram processados"))
         return True, "\n".join(linhas)
 
     # ---------------- Persistência ----------------

@@ -9,6 +9,7 @@ from formatacao import (formatar_reais, formatar_numero, formatar_valor_moeda,
 from transacao import Transacao
 import seguranca
 from open_banking import Consentimento
+from datetime import datetime, timedelta
 
 TAXAS_CAMBIO = {
     "dolar": 5.00,  # 1 Dólar = 5 Reais
@@ -150,35 +151,59 @@ class Conta:
                 f"Saldo em Yuan: ¥{formatar_numero(self.saldo_yuan)} "
                 f"({formatar_reais(self.saldo_yuan * TAXAS_CAMBIO['yuan'])})")
 
-    def extrato(self):
-        linhas = [linha_titulo(f"Extrato de {self.titular} (Conta {self.numero})")]
-        if not self.historico:
-            linhas.append("Nenhuma transação registrada.")
+    def transacoes_do_periodo(self, dias=None):
+        """Transações do histórico, opcionalmente limitadas aos últimos N dias."""
+        if dias is None:
+            return list(self.historico)
+
+        limite = datetime.now() - timedelta(days=dias)
+        selecionadas = []
+        for transacao in self.historico:
+            if not transacao.quando:
+                continue  # data desconhecida fica fora de recortes por período
+            if datetime.fromisoformat(transacao.quando) >= limite:
+                selecionadas.append(transacao)
+        return selecionadas
+
+    def extrato(self, dias=None):
+        titulo = f"Extrato de {self.titular} (Conta {self.numero})"
+        if dias:
+            titulo += f" - últimos {dias} dias"
+        linhas = [linha_titulo(titulo)]
+
+        transacoes = self.transacoes_do_periodo(dias)
+        if not transacoes:
+            linhas.append("Nenhuma transação no período.")
         else:
-            for transacao in reversed(self.historico):
-                linhas.append(f"  {transacao.tipo:<26} {transacao.descricao()}")
+            for transacao in reversed(transacoes):
+                linhas.append(f"  {transacao.data_hora()}  {transacao.tipo:<22} "
+                              f"{transacao.descricao()}")
+            linhas.append(f"Transações exibidas: {len(transacoes)}")
         linhas.append(f"Saldo atual: {formatar_reais(self.saldo)}")
         linhas.append(linha_separadora())
         return "\n".join(linhas)
 
-    def gastos_por_categoria(self):
+    def gastos_por_categoria(self, dias=None):
         """Agrupa os gastos do histórico por categoria (GROUP BY em memória).
 
         Percorre a pilha de transações e acumula o valor de cada gasto no
         dicionário de totais, usando a categoria como chave.
         """
         totais = {}
-        for transacao in self.historico:
+        for transacao in self.transacoes_do_periodo(dias):
             if transacao.tipo not in TIPOS_DE_GASTO:
                 continue
             categoria = transacao.obter("categoria") or CATEGORIA_PADRAO
             totais[categoria] = totais.get(categoria, 0.0) + transacao.valor
         return totais
 
-    def relatorio_gastos(self):
-        totais = self.gastos_por_categoria()
+    def relatorio_gastos(self, dias=None):
+        totais = self.gastos_por_categoria(dias)
 
-        linhas = [linha_titulo(f"Gastos por Categoria - {self.titular}")]
+        titulo = f"Gastos por Categoria - {self.titular}"
+        if dias:
+            titulo += f" (últimos {dias} dias)"
+        linhas = [linha_titulo(titulo)]
         if not totais:
             linhas.append("Nenhum gasto registrado até o momento.")
             linhas.append(linha_separadora())

@@ -23,9 +23,33 @@ class Interface:
         while True:
             entrada = input("Digite o valor: R$ ").strip()
             try:
-                return float(entrada)
+                return Interface.converter_valor(entrada)
             except ValueError:
-                print("[ERRO] Valor inválido. Digite um número (ex: 100 ou 99.90).\n")
+                print("[ERRO] Valor inválido. Digite um número "
+                      "(ex: 100, 99,90 ou 1.250,50).\n")
+
+    @staticmethod
+    def converter_valor(entrada):
+        """Converte o texto digitado em número, aceitando os dois padrões.
+
+        O sistema exibe os valores no padrão brasileiro (R$ 1.003,00), então
+        recusar a vírgula na digitação seria incoerente. A presença da vírgula
+        é o que define o padrão: se ela aparece, ela é o separador decimal e
+        os pontos são separadores de milhar; se não aparece, o ponto é o
+        separador decimal, como float() já espera.
+
+            "1.250,50" -> 1250.5     (vírgula presente: ponto é milhar)
+            "99,90"    -> 99.9
+            "1250.50"  -> 1250.5     (sem vírgula: ponto é decimal)
+            "100"      -> 100.0
+
+        Levanta ValueError quando o texto não é um número, para que quem
+        chamou decida o que fazer.
+        """
+        texto = entrada.strip()
+        if "," in texto:
+            texto = texto.replace(".", "").replace(",", ".")
+        return float(texto)
 
     @staticmethod
     def pedir_inteiro(mensagem):
@@ -77,6 +101,23 @@ class Interface:
             if 1 <= indice <= len(nomes):
                 return nomes[indice - 1]
             print(f"[ERRO] Escolha um número entre 1 e {len(nomes)}.\n")
+
+    @staticmethod
+    def pedir_periodo():
+        """Escolhe o recorte de tempo do extrato/relatório. None = tudo."""
+        print("\nPeríodo:")
+        print("  [1] Últimos 7 dias")
+        print("  [2] Últimos 30 dias")
+        print("  [3] Últimos 90 dias")
+        print("  [4] Todo o histórico")
+        opcoes = {"1": 7, "2": 30, "3": 90, "4": None}
+        while True:
+            escolha = input("Escolha [1-4] (Enter para todo o histórico): ").strip()
+            if not escolha:
+                return None
+            if escolha in opcoes:
+                return opcoes[escolha]
+            print("[ERRO] Escolha um número entre 1 e 4.\n")
 
     @staticmethod
     def pedir_categoria():
@@ -193,7 +234,8 @@ class Interface:
                     _, mensagem = self.banco.executar(conta, conta.sacar, valor)
                     self.mostrar(mensagem)
                 case "4":
-                    self.mostrar(conta.extrato())
+                    dias = self.pedir_periodo()
+                    self.mostrar(conta.extrato(dias))
                 case "5":
                     _, mensagem = self.banco.estornar_ultima_transacao(conta)
                     self.mostrar(mensagem)
@@ -203,7 +245,8 @@ class Interface:
                 case "7":
                     self.mostrar(self.banco.historico_formatado(conta))
                 case "8":
-                    self.mostrar(conta.relatorio_gastos())
+                    dias = self.pedir_periodo()
+                    self.mostrar(conta.relatorio_gastos(dias))
                 case "0":
                     return
                 case _:
@@ -216,7 +259,8 @@ class Interface:
             print("[2] Pagar Boleto Agora")
             print("[3] Agendar Boleto (Fila)")
             print("[4] Ver Fila de Boletos")
-            print("[5] Processar Boletos Agendados")
+            print("[5] Processar por Ordem de Chegada (Fila FIFO)")
+            print("[6] Processar por Vencimento (Fila de Prioridade)")
             print("[0] Voltar")
             print(linha_separadora())
 
@@ -237,12 +281,17 @@ class Interface:
                     descricao = self.pedir_texto("Descrição do boleto (ex: Conta de Luz): ")
                     valor = self.pedir_valor()
                     categoria = self.pedir_categoria()
-                    _, mensagem = self.banco.agendar_boleto(conta, descricao, valor, categoria)
+                    dias = self.pedir_inteiro("Vence em quantos dias? ")
+                    _, mensagem = self.banco.agendar_boleto(conta, descricao, valor,
+                                                            categoria, dias)
                     self.mostrar(mensagem)
                 case "4":
                     self.mostrar(self.banco.fila_formatada())
                 case "5":
                     _, mensagem = self.banco.processar_boletos()
+                    self.mostrar(mensagem)
+                case "6":
+                    _, mensagem = self.banco.processar_boletos_por_vencimento()
                     self.mostrar(mensagem)
                 case "0":
                     return

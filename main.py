@@ -9,6 +9,7 @@ from conta import Conta
 from interface import Interface
 from open_banking import InstituicaoParceira
 import persistencia
+import persistencia_txt
 
 
 def carregar_contas_ficticias(banco):
@@ -63,20 +64,81 @@ def carregar_instituicoes_parceiras(banco):
     return banco
 
 
-def main():
-    banco, mensagem = persistencia.carregar()
-    if banco is None:
-        # Primeira execução (ou arquivo ilegível): começa com os dados de demonstração
-        banco = carregar_contas_ficticias(Banco("ByteBank"))
-        carregar_instituicoes_parceiras(banco)
-        print(f"{mensagem} Iniciando com as contas de demonstração.\n")
-    else:
-        print(f"{mensagem}\n")
+def montar_banco_a_partir_das_contas(contas):
+    """Cria um banco já populado com as contas lidas do arquivo de texto."""
+    banco = Banco("ByteBank")
+    for conta in contas:
+        banco.adicionar_conta(conta)
+    carregar_instituicoes_parceiras(banco)
+    return banco
 
-    Interface(banco).executar()
+
+def dar_boot():
+    """Restaura o estado do banco a partir dos arquivos em disco.
+
+    São lidas as duas fontes de persistência:
+
+      - 'contas.txt'  -> contas e saldos (Projeto 1 da Aula 7)
+      - 'dados_bytebank.json' -> estado completo, incluindo o extrato de
+        transações e os consentimentos de Open Banking, que são estruturas
+        aninhadas e não cabem em um CSV plano.
+
+    Quando os dois existem, o JSON é usado porque contém tudo o que o TXT
+    contém e mais; o TXT então serve de conferência independente dos saldos.
+    Quando só o TXT existe, ele reconstrói o banco sozinho. Sem nenhum dos
+    dois, o sistema sobe com as contas de demonstração.
+
+    Devolve o banco pronto para uso.
+    """
+    contas_txt, ignoradas = persistencia_txt.carregar_contas_txt_detalhado()
+    print(persistencia_txt.resumo_do_carregamento(contas_txt, ignoradas))
+
+    banco, mensagem_json = persistencia.carregar()
+
+    if banco is not None:
+        print(mensagem_json)
+        divergencias = persistencia_txt.conferir_saldos(contas_txt, banco.contas)
+        for divergencia in divergencias:
+            print(f"[AVISO] Divergência entre os arquivos: {divergencia}")
+        print()
+        return banco
+
+    if contas_txt:
+        print("Estado reconstruído a partir do arquivo de texto.\n")
+        return montar_banco_a_partir_das_contas(contas_txt)
+
+    print(f"{mensagem_json} Iniciando com as contas de demonstração.\n")
+    banco = carregar_contas_ficticias(Banco("ByteBank"))
+    carregar_instituicoes_parceiras(banco)
+    return banco
+
+
+def encerrar(banco):
+    """Grava o estado do banco nos dois arquivos antes de o programa sair."""
+    if persistencia_txt.salvar_contas_txt(banco.contas):
+        print(f"{len(banco.contas)} conta(s) gravada(s) em "
+              f"'{persistencia_txt.ARQUIVO_CONTAS}'.")
+    else:
+        print(f"[ERRO] Não foi possível gravar "
+              f"'{persistencia_txt.ARQUIVO_CONTAS}'.")
 
     sucesso, mensagem = persistencia.salvar(banco)
     print(mensagem)
+
+
+def main():
+    banco = dar_boot()
+
+    # O 'finally' garante que a gravação aconteça mesmo se o programa for
+    # interrompido no meio (Ctrl+C, Ctrl+D ou um erro inesperado). Sem ele, a
+    # gravação só ocorreria na saída pelo menu, e qualquer interrupção
+    # devolveria o sistema à amnésia que a persistência existe para curar.
+    try:
+        Interface(banco).executar()
+    except (KeyboardInterrupt, EOFError):
+        print("\n\n[AVISO] Execução interrompida. Salvando os dados...")
+    finally:
+        encerrar(banco)
 
 
 if __name__ == "__main__":
