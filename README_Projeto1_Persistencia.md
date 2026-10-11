@@ -3,7 +3,7 @@
 **Disciplina:** BD015 – Algoritmo e Estrutura de Dados
 **Aula 7 –** Persistência de Dados em Arquivos
 **Professor:** Fernando Ferreira de Carvalho
-**Aluno:** Lucas Barreto Rodrigues de Barros
+**Aluno:** Lucas Barreto Rodrigues de Barros e Felipe Saraiva
 **Instituição:** CESAR School
 
 ---
