@@ -33,18 +33,23 @@ O login aceita **número da conta ou CPF**, seguido do PIN.
 | Arquivo | Responsabilidade |
 |---|---|
 | `main.py` | Ponto de entrada: carrega os dados e inicia a interface |
-| `conta.py` | Classe `Conta` — dados e operações de uma conta individual |
-| `banco.py` | Classe `Banco` — coleção de contas, PIX, estornos, fila, log e Open Banking |
+| `cliente.py` | Classe `Cliente` — nome, CPF e contato do titular |
+| `conta.py` | Classe `ContaCorrente` — dados e operações de uma conta, incluindo o PIX e o estorno entre duas contas |
+| `banco.py` | Classe `Banco` — coleção de contas, fila, log, Open Banking e `salvar_estado()` |
 | `interface.py` | Classe `Interface` — menus, leitura de entrada e exibição |
 | `transacao.py` | Classe `Transacao` — item da pilha de histórico |
 | `open_banking.py` | Instituições parceiras, consentimentos e diretório |
 | `seguranca.py` | Hash de PIN com salt |
-| `persistencia.py` | Gravação e leitura do estado em JSON |
+| `persistencia_txt.py` | Gravação e leitura das contas em TXT (Projeto 1 da Aula 7) |
 | `formatacao.py` | Formatação financeira brasileira e layout dos painéis |
 
-**Separação entre lógica e apresentação:** os métodos de `Conta` e `Banco` não imprimem nada — devolvem `(sucesso, mensagem)`. Quem exibe é a `Interface`. Isso mantém as regras de negócio testáveis de forma independente da tela.
+**Separação entre lógica e apresentação:** os métodos de `ContaCorrente` e `Banco` não imprimem nada — devolvem `(sucesso, mensagem)`. Quem exibe é a `Interface`. Isso mantém as regras de negócio testáveis de forma independente da tela.
 
-**Divisão entre `Conta` e `Banco`:** operações de uma conta só (depósito, saque, cofrinhos, cartão, câmbio, empréstimo) ficam em `Conta`. Operações entre contas ou do sistema inteiro (PIX, estorno, fila de boletos, log, Open Banking) ficam em `Banco`.
+**Composição:** cada `ContaCorrente` guarda a instância do `Cliente` dono, e o `Banco` guarda todas as contas (Cliente → ContaCorrente → Banco).
+
+**Divisão entre `ContaCorrente` e `Banco`:** a conta faz tudo o que altera o próprio estado — depósito, saque, cofrinhos, cartão, câmbio, empréstimo e também o PIX e o estorno, que mexem em duas contas ao mesmo tempo. O `Banco` localiza as contas, coordena as instituições parceiras, mantém a fila de boletos e registra o log.
+
+**Encapsulamento:** todos os atributos de todas as classes de dados são privados (`__`), lidos por `@property` sem setter, e as classes usam `__slots__`. Nada pode ser alterado por fora: `conta.saldo = 0` gera `AttributeError`. Os detalhes estão em [`README_Arquitetura.md`](README_Arquitetura.md).
 
 ## Níveis Obrigatórios
 
@@ -96,14 +101,14 @@ Compartilhamento de dados entre instituições, seguindo a lógica do Open Finan
 - **Portabilidade de saldo** entre instituições, preservando o patrimônio total
 - **Trilha de acessos:** registro de cada consulta a dados externos, com data, instituição e escopo
 
-### 8. Persistência em JSON
-O estado completo (contas, cofrinhos, pilhas, fila, log, consentimentos) é gravado ao sair e recuperado na abertura. Arquivo corrompido ou de versão anterior não interrompe a execução: o sistema avisa e inicia com os dados de demonstração.
+### 8. Persistência em JSON e TXT
+O método `Banco.salvar_estado()` grava o estado completo (contas, cofrinhos, pilhas, fila, log, consentimentos) em JSON e as contas em `contas.txt` ao sair; `Banco.carregar_estado()` recupera tudo na abertura. Arquivo corrompido ou de versão anterior não interrompe a execução: o sistema avisa e inicia com os dados de demonstração.
 
 ### 9. Busca Binária
 A lista de contas é mantida ordenada por número, e a busca usa divisão pela metade — **O(log n)** em vez de O(n). Com 10.000 contas, o pior caso cai de 10.000 para 14 comparações. A inserção usa busca binária para achar a posição correta. O método `busca_sequencial` permanece no código para comparação de desempenho.
 
 ### 10. Pilha de Refazer (Redo)
-Uma segunda pilha guarda o que foi estornado, permitindo reaplicar a operação. Qualquer operação nova limpa o refazer pendente — mesmo comportamento do Ctrl+Z / Ctrl+Y. Estorno e refazer compartilham um único método (`_aplicar_efeito`), que inverte o sinal do efeito em vez de duplicar a lista de tipos.
+Uma segunda pilha guarda o que foi estornado, permitindo reaplicar a operação. Qualquer operação nova limpa o refazer pendente — mesmo comportamento do Ctrl+Z / Ctrl+Y. Estorno e refazer compartilham um único método privado (`__aplicar_efeito`), que inverte o sinal do efeito em vez de duplicar a lista de tipos.
 
 ### 11. PIN com Bloqueio
 Acesso protegido por PIN de 4 dígitos, com bloqueio após 3 tentativas erradas e desbloqueio mediante validação de CPF. O PIN nunca é guardado em texto: o que fica salvo é o hash (`pbkdf2_hmac`, SHA-256, 100.000 iterações) com **salt próprio por conta**, e a verificação usa `compare_digest` para não vazar informação pelo tempo de resposta.
@@ -113,13 +118,13 @@ Acesso protegido por PIN de 4 dígitos, com bloqueio após 3 tentativas erradas 
 | Estrutura | Onde é usada | Operação |
 |---|---|---|
 | Lista ordenada | `Banco.contas` | Busca binária O(log n) por número |
-| Pilha (LIFO) | `Conta.historico` | `append()` para registrar, `pop()` para estornar |
-| Pilha (LIFO) | `Conta.pilha_refazer` | Guarda o que foi estornado, para refazer |
-| Fila (FIFO) | `Banco.fila_boletos` | `append()` para agendar, `pop(0)` para processar |
-| Dicionário | `Conta.cofrinhos` | Subcontas nomeadas com saldo e taxa |
-| Dicionário | `Conta.consentimentos` | Autorizações do Open Banking por instituição |
+| Pilha (LIFO) | `ContaCorrente.historico` | `append()` para registrar, `pop()` para estornar |
+| Pilha (LIFO) | `ContaCorrente.__pilha_refazer` | Guarda o que foi estornado, para refazer |
+| Fila (FIFO) | `Banco.__fila_boletos` | `append()` para agendar, `pop(0)` para processar |
+| Dicionário | `ContaCorrente.cofrinhos` | Subcontas nomeadas com saldo e taxa |
+| Dicionário | `ContaCorrente.consentimentos` | Autorizações do Open Banking por instituição |
 | Dicionário acumulador | `gastos_por_categoria()` | GROUP BY em memória dos gastos |
-| Lista de dicionários | `Banco.registro_operacoes` | Log de auditoria, filtrado por conta |
+| Lista de dicionários | `Banco.__registro_operacoes` | Log de auditoria, filtrado por conta |
 
 **Pilha x Log:** a pilha (`historico`) guarda as transações estornáveis e encolhe a cada estorno. O log (`registro_operacoes`) é auditoria e nunca perde informação — os próprios estornos são registrados nele. Operações recusadas não entram no log.
 
