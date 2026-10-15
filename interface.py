@@ -1,5 +1,5 @@
 """Camada de interface: exibe os menus, lê as entradas do usuário e
-imprime as mensagens devolvidas pelas classes Conta e Banco.
+imprime as mensagens devolvidas pelas classes ContaCorrente e Banco.
 """
 
 from formatacao import formatar_reais, linha_separadora, linha_titulo, LARGURA_PAINEL
@@ -9,8 +9,12 @@ from open_banking import ESCOPOS
 
 
 class Interface:
+    # Lista fechada de atributos. Sem ela, 'objeto.atributo_novo = x' não
+    # daria erro: o Python criaria um atributo solto, que a classe nunca lê.
+    __slots__ = ("__banco",)
+
     def __init__(self, banco):
-        self.banco = banco
+        self.__banco = banco
 
     # ---------------- Utilitários de entrada e saída ----------------
 
@@ -141,7 +145,7 @@ class Interface:
 
     def cabecalho(self, conta, titulo=None):
         print()
-        print(linha_titulo(f"{self.banco.nome} | Conta {conta.numero} - {conta.titular}"))
+        print(linha_titulo(f"{self.__banco.nome} | Conta {conta.numero} - {conta.titular}"))
         if titulo:
             print(titulo.center(LARGURA_PAINEL).rstrip())
         print(linha_separadora("-"))
@@ -153,10 +157,10 @@ class Interface:
     # ---------------- Login ----------------
 
     def login(self):
-        print(linha_titulo(f"BEM-VINDO AO {self.banco.nome.upper()}"))
+        print(linha_titulo(f"BEM-VINDO AO {self.__banco.nome.upper()}"))
         while True:
             identificador = self.pedir_texto("Digite o número da conta ou o CPF: ")
-            conta = self.banco.buscar_por_numero_ou_cpf(identificador)
+            conta = self.__banco.buscar_por_numero_ou_cpf(identificador)
 
             if conta is None:
                 print("[ERRO] Conta não encontrada. Tente novamente.\n")
@@ -227,23 +231,23 @@ class Interface:
                     self.mostrar(conta.resumo_saldo())
                 case "2":
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.executar(conta, conta.depositar, valor)
+                    _, mensagem = self.__banco.executar(conta, conta.depositar, valor)
                     self.mostrar(mensagem)
                 case "3":
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.executar(conta, conta.sacar, valor)
+                    _, mensagem = self.__banco.executar(conta, conta.sacar, valor)
                     self.mostrar(mensagem)
                 case "4":
                     dias = self.pedir_periodo()
                     self.mostrar(conta.extrato(dias))
                 case "5":
-                    _, mensagem = self.banco.estornar_ultima_transacao(conta)
+                    _, mensagem = self.__banco.estornar_ultima_transacao(conta)
                     self.mostrar(mensagem)
                 case "6":
-                    _, mensagem = self.banco.refazer_ultima_transacao(conta)
+                    _, mensagem = self.__banco.refazer_ultima_transacao(conta)
                     self.mostrar(mensagem)
                 case "7":
-                    self.mostrar(self.banco.historico_formatado(conta))
+                    self.mostrar(self.__banco.historico_formatado(conta))
                 case "8":
                     dias = self.pedir_periodo()
                     self.mostrar(conta.relatorio_gastos(dias))
@@ -268,13 +272,13 @@ class Interface:
                 case "1":
                     chave = self.pedir_texto("Digite a chave PIX de destino: ")
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.transferir_pix(conta, chave, valor)
+                    _, mensagem = self.__banco.transferir_pix(conta, chave, valor)
                     self.mostrar(mensagem)
                 case "2":
                     descricao = self.pedir_texto("Descrição do boleto (ex: Conta de Luz): ")
                     valor = self.pedir_valor()
                     categoria = self.pedir_categoria()
-                    _, mensagem = self.banco.executar(conta, conta.pagar_boleto,
+                    _, mensagem = self.__banco.executar(conta, conta.pagar_boleto,
                                                       descricao, valor, categoria)
                     self.mostrar(mensagem)
                 case "3":
@@ -282,16 +286,16 @@ class Interface:
                     valor = self.pedir_valor()
                     categoria = self.pedir_categoria()
                     dias = self.pedir_inteiro("Vence em quantos dias? ")
-                    _, mensagem = self.banco.agendar_boleto(conta, descricao, valor,
+                    _, mensagem = self.__banco.agendar_boleto(conta, descricao, valor,
                                                             categoria, dias)
                     self.mostrar(mensagem)
                 case "4":
-                    self.mostrar(self.banco.fila_formatada())
+                    self.mostrar(self.__banco.fila_formatada())
                 case "5":
-                    _, mensagem = self.banco.processar_boletos()
+                    _, mensagem = self.__banco.processar_boletos()
                     self.mostrar(mensagem)
                 case "6":
-                    _, mensagem = self.banco.processar_boletos_por_vencimento()
+                    _, mensagem = self.__banco.processar_boletos_por_vencimento()
                     self.mostrar(mensagem)
                 case "0":
                     return
@@ -323,14 +327,14 @@ class Interface:
                     nome = self.escolher_cofrinho(conta)
                     if nome:
                         valor = self.pedir_valor()
-                        _, mensagem = self.banco.executar(conta, conta.guardar_no_cofrinho,
+                        _, mensagem = self.__banco.executar(conta, conta.guardar_no_cofrinho,
                                                           nome, valor)
                         self.mostrar(mensagem)
                 case "4":
                     nome = self.escolher_cofrinho(conta)
                     if nome:
                         valor = self.pedir_valor()
-                        _, mensagem = self.banco.executar(conta, conta.resgatar_do_cofrinho,
+                        _, mensagem = self.__banco.executar(conta, conta.resgatar_do_cofrinho,
                                                           nome, valor)
                         self.mostrar(mensagem)
                 case "5":
@@ -343,7 +347,7 @@ class Interface:
                     nome = self.escolher_cofrinho(conta)
                     if nome:
                         meses = self.pedir_inteiro("Período em meses: ")
-                        _, mensagem = self.banco.executar(conta, conta.aplicar_rendimento,
+                        _, mensagem = self.__banco.executar(conta, conta.aplicar_rendimento,
                                                           nome, meses)
                         self.mostrar(mensagem)
                 case "7":
@@ -371,12 +375,12 @@ class Interface:
                 case "2":
                     valor = self.pedir_valor()
                     categoria = self.pedir_categoria()
-                    _, mensagem = self.banco.executar(conta, conta.comprar_no_cartao,
+                    _, mensagem = self.__banco.executar(conta, conta.comprar_no_cartao,
                                                       valor, categoria)
                     self.mostrar(mensagem)
                 case "3":
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.executar(conta, conta.pagar_fatura, valor)
+                    _, mensagem = self.__banco.executar(conta, conta.pagar_fatura, valor)
                     self.mostrar(mensagem)
                 case "0":
                     return
@@ -399,18 +403,18 @@ class Interface:
                 case "2":
                     moeda = self.pedir_texto("Digite a moeda a ser comprada (dolar, euro, yuan): ").lower()
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.executar(conta, conta.comprar_moeda, moeda, valor)
+                    _, mensagem = self.__banco.executar(conta, conta.comprar_moeda, moeda, valor)
                     self.mostrar(mensagem)
                 case "3":
                     moeda = self.pedir_texto("Digite a moeda a ser vendida (dolar, euro, yuan): ").lower()
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.executar(conta, conta.vender_moeda, moeda, valor)
+                    _, mensagem = self.__banco.executar(conta, conta.vender_moeda, moeda, valor)
                     self.mostrar(mensagem)
                 case "4":
                     origem = self.pedir_texto("Digite a moeda de origem (real, dolar, euro, yuan): ").lower()
                     destino = self.pedir_texto("Digite a moeda de destino (real, dolar, euro, yuan): ").lower()
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.executar(conta, conta.cambiar, origem, destino, valor)
+                    _, mensagem = self.__banco.executar(conta, conta.cambiar, origem, destino, valor)
                     self.mostrar(mensagem)
                 case "0":
                     return
@@ -439,13 +443,13 @@ class Interface:
                 case "3":
                     valor = self.pedir_valor()
                     parcelas = self.pedir_inteiro("Digite o número de parcelas: ")
-                    _, mensagem = self.banco.executar(conta, conta.contratar_emprestimo, valor, parcelas)
+                    _, mensagem = self.__banco.executar(conta, conta.contratar_emprestimo, valor, parcelas)
                     self.mostrar(mensagem)
                 case "4":
                     self.mostrar(conta.resumo_emprestimo())
                 case "5":
                     valor = self.pedir_valor()
-                    _, mensagem = self.banco.executar(conta, conta.pagar_emprestimo, valor)
+                    _, mensagem = self.__banco.executar(conta, conta.pagar_emprestimo, valor)
                     self.mostrar(mensagem)
                 case "0":
                     return
@@ -465,7 +469,7 @@ class Interface:
                     self.mostrar(conta.resumo_fidelidade())
                 case "2":
                     pontos = self.pedir_inteiro("Digite a quantidade de pontos a resgatar: ")
-                    _, mensagem = self.banco.executar(conta, conta.resgatar_pontos, pontos)
+                    _, mensagem = self.__banco.executar(conta, conta.resgatar_pontos, pontos)
                     self.mostrar(mensagem)
                 case "0":
                     return
@@ -474,8 +478,8 @@ class Interface:
 
     def escolher_instituicao(self, conta, apenas_com_conta=False):
         """Lista as instituições e devolve o código escolhido, ou None."""
-        parceiras = (self.banco.instituicoes_com_cliente(conta) if apenas_com_conta
-                     else self.banco.diretorio.listar())
+        parceiras = (self.__banco.instituicoes_com_cliente(conta) if apenas_com_conta
+                     else self.__banco.diretorio.listar())
         if not parceiras:
             print("\nNenhuma instituição disponível.\n")
             return None
@@ -533,30 +537,30 @@ class Interface:
 
             match self.pedir_texto("Escolha uma opção: "):
                 case "1":
-                    self.mostrar(self.banco.listar_instituicoes(conta))
+                    self.mostrar(self.__banco.listar_instituicoes(conta))
                 case "2":
                     codigo = self.escolher_instituicao(conta)
                     if codigo:
                         escopos = self.escolher_escopos()
-                        _, mensagem = self.banco.autorizar(conta, codigo, escopos)
+                        _, mensagem = self.__banco.autorizar(conta, codigo, escopos)
                         self.mostrar(mensagem)
                 case "3":
-                    self.mostrar(self.banco.listar_consentimentos(conta))
+                    self.mostrar(self.__banco.listar_consentimentos(conta))
                 case "4":
                     codigo = self.escolher_instituicao(conta)
                     if codigo:
-                        _, mensagem = self.banco.revogar(conta, codigo)
+                        _, mensagem = self.__banco.revogar(conta, codigo)
                         self.mostrar(mensagem)
                 case "5":
-                    self.mostrar(self.banco.visao_consolidada(conta))
+                    self.mostrar(self.__banco.visao_consolidada(conta))
                 case "6":
                     codigo = self.escolher_instituicao(conta, apenas_com_conta=True)
                     if codigo:
                         valor = self.pedir_valor()
-                        _, mensagem = self.banco.portar_saldo(conta, codigo, valor)
+                        _, mensagem = self.__banco.portar_saldo(conta, codigo, valor)
                         self.mostrar(mensagem)
                 case "7":
-                    self.mostrar(self.banco.trilha_acessos(conta))
+                    self.mostrar(self.__banco.trilha_acessos(conta))
                 case "0":
                     return
                 case _:
@@ -576,9 +580,13 @@ class Interface:
                     numero = self.pedir_texto("Digite o número da nova conta: ")
                     titular = self.pedir_texto("Digite o nome do titular: ")
                     cpf = self.pedir_texto("Digite o CPF do titular: ")
+                    email = self.pedir_texto("E-mail de contato (Enter para pular): ")
+                    telefone = self.pedir_texto("Telefone de contato (Enter para pular): ")
                     chave_pix = self.pedir_texto("Digite a chave PIX: ")
                     pin = self.pedir_texto(f"Defina o PIN de {TAMANHO_PIN} dígitos: ")
-                    _, mensagem = self.banco.criar_conta(numero, titular, cpf, chave_pix, pin=pin)
+                    _, mensagem = self.__banco.criar_conta(numero, titular, cpf, chave_pix,
+                                                         email=email, telefone=telefone,
+                                                         pin=pin)
                     self.mostrar(mensagem)
                 case "2":
                     atual = self.pedir_texto("Digite o PIN atual: ")
@@ -638,5 +646,5 @@ class Interface:
         while True:
             conta = self.login()
             if self.menu_principal(conta) == "sair":
-                print(f"\nObrigado por usar o {self.banco.nome}. Até logo!")
+                print(f"\nObrigado por usar o {self.__banco.nome}. Até logo!")
                 break

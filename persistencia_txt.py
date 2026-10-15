@@ -7,8 +7,8 @@ serialização é usada aqui: a montagem e a quebra de cada linha são manuais.
 
 Formato de 'contas.txt' — uma conta por linha, campos separados por vírgula:
 
-    numero,titular,cpf,chave_pix,salt,pin_hash,bloqueada,tentativas,
-    saldo,limite_cartao,fatura_cartao,divida_emprestimo,
+    numero,titular,cpf,email,telefone,chave_pix,salt,pin_hash,bloqueada,
+    tentativas,saldo,limite_cartao,fatura_cartao,divida_emprestimo,
     dolar,euro,yuan,bytepoints,cofrinhos
 
 O último campo guarda os cofrinhos, que são um dicionário aninhado. Como um
@@ -16,19 +16,26 @@ arquivo CSV é plano, eles recebem separadores próprios:
 
     Reserva:5000.00:0.005;Viagem:1200.00:0.007
     └──┬──┘ └───┬───┘ └─┬─┘
-     nome    saldo    taxa mensal      (contas separadas por ';')
+     nome    saldo    taxa mensal      (cofrinhos separados por ';')
 
 Por isso os textos gravados passam por 'limpar_texto': uma vírgula no nome do
 titular, ou um ';' no nome de um cofrinho, quebraria a leitura da linha.
 
-Relação com 'persistencia.py' (JSON): este módulo guarda o estado financeiro
-das contas, que é o que o Projeto 1 pede. O extrato (pilha de transações) e os
-consentimentos de Open Banking são estruturas aninhadas e profundas, que só o
-JSON armazena. Os dois arquivos são gravados ao encerrar o sistema e ambos
-são lidos no boot — veja 'main.py'.
+Encapsulamento: os atributos sensíveis da ContaCorrente (saldo, PIN, bloqueio)
+são privados. Este módulo não tenta acessá-los: na gravação ele usa o
+dicionário que a própria conta exporta (para_dicionario) e na leitura entrega
+um dicionário para a própria classe se reconstruir (de_dicionario). O arquivo
+TXT só cuida do formato; quem decide o que é uma conta válida é a classe.
+
+Relação com o JSON: este módulo guarda o estado financeiro das contas, que é
+o que o Projeto 1 pede. O extrato (pilha de transações) e os consentimentos
+de Open Banking são estruturas aninhadas e profundas, que só o JSON armazena.
+Os dois arquivos são gravados por Banco.salvar_estado() ao encerrar o sistema
+e lidos por Banco.carregar_estado() no boot.
 """
 
-from conta import Conta
+from conta import ContaCorrente
+from cliente import Cliente
 
 ARQUIVO_CONTAS = "contas.txt"
 
@@ -37,15 +44,32 @@ SEPARADOR_DE_COFRINHO = ";"
 SEPARADOR_INTERNO = ":"
 MARCA_DE_COMENTARIO = "#"
 
-CABECALHO = (
-    "# numero,titular,cpf,chave_pix,salt,pin_hash,bloqueada,tentativas,"
-    "saldo,limite_cartao,fatura_cartao,divida_emprestimo,"
-    "dolar,euro,yuan,bytepoints,cofrinhos"
-)
+# Ordem das colunas no arquivo. Ela é definida uma única vez e usada tanto na
+# gravação quanto na leitura, para que as duas nunca fiquem desencontradas.
+COLUNAS = [
+    "numero", "titular", "cpf", "email", "telefone", "chave_pix",
+    "salt", "pin_hash", "bloqueada", "tentativas",
+    "saldo", "limite_cartao", "fatura_cartao", "divida_emprestimo",
+    "dolar", "euro", "yuan", "bytepoints", "cofrinhos",
+]
 
-# Quantidade de campos de uma linha completa. Serve de validação na leitura:
-# linha com outro número de campos está corrompida e é ignorada.
-TOTAL_DE_CAMPOS = 17
+# Formato gravado antes da classe Cliente existir (sem e-mail e telefone).
+# Continua sendo lido para que um contas.txt antigo não seja perdido.
+COLUNAS_VERSAO_ANTERIOR = [
+    "numero", "titular", "cpf", "chave_pix",
+    "salt", "pin_hash", "bloqueada", "tentativas",
+    "saldo", "limite_cartao", "fatura_cartao", "divida_emprestimo",
+    "dolar", "euro", "yuan", "bytepoints", "cofrinhos",
+]
+
+# O número de campos da linha identifica o formato. Linha com outra
+# quantidade está corrompida e é ignorada.
+FORMATOS_POR_QUANTIDADE = {
+    len(COLUNAS): COLUNAS,
+    len(COLUNAS_VERSAO_ANTERIOR): COLUNAS_VERSAO_ANTERIOR,
+}
+
+CABECALHO = MARCA_DE_COMENTARIO + " " + SEPARADOR_DE_CAMPO.join(COLUNAS)
 
 CARACTERES_PROIBIDOS = (SEPARADOR_DE_CAMPO, SEPARADOR_DE_COFRINHO,
                         SEPARADOR_INTERNO, "\n", "\r")
@@ -102,30 +126,35 @@ def ler_cofrinhos(texto):
 
 def montar_linha(conta):
     """Monta a linha de texto que representa uma conta."""
-    campos = [
-        limpar_texto(conta.numero),
-        limpar_texto(conta.titular),
-        limpar_texto(conta.cpf),
-        limpar_texto(conta.chave_pix),
-        conta.salt,
-        conta.pin_hash,
-        str(conta.bloqueada),
-        str(conta.tentativas_falhas),
-        f"{conta.saldo:.2f}",
-        f"{conta.limite_cartao_credito:.2f}",
-        f"{conta.fatura_cartao_credito:.2f}",
-        f"{conta.divida_emprestimo:.2f}",
-        f"{conta.saldo_dolar:.2f}",
-        f"{conta.saldo_euro:.2f}",
-        f"{conta.saldo_yuan:.2f}",
-        f"{conta.bytepoints:.2f}",
-        montar_cofrinhos(conta.cofrinhos),
-    ]
-    return SEPARADOR_DE_CAMPO.join(campos)
+    dados = conta.para_dicionario()
+    cliente = dados["cliente"]
+
+    valores = {
+        "numero": limpar_texto(dados["numero"]),
+        "titular": limpar_texto(cliente["nome"]),
+        "cpf": limpar_texto(cliente["cpf"]),
+        "email": limpar_texto(cliente["email"]),
+        "telefone": limpar_texto(cliente["telefone"]),
+        "chave_pix": limpar_texto(dados["chave_pix"]),
+        "salt": dados["salt"],
+        "pin_hash": dados["pin_hash"],
+        "bloqueada": str(dados["bloqueada"]),
+        "tentativas": str(dados["tentativas_falhas"]),
+        "saldo": f"{dados['saldo']:.2f}",
+        "limite_cartao": f"{dados['limite_cartao_credito']:.2f}",
+        "fatura_cartao": f"{dados['fatura_cartao_credito']:.2f}",
+        "divida_emprestimo": f"{dados['divida_emprestimo']:.2f}",
+        "dolar": f"{dados['saldo_dolar']:.2f}",
+        "euro": f"{dados['saldo_euro']:.2f}",
+        "yuan": f"{dados['saldo_yuan']:.2f}",
+        "bytepoints": f"{dados['bytepoints']:.2f}",
+        "cofrinhos": montar_cofrinhos(dados["cofrinhos"]),
+    }
+    return SEPARADOR_DE_CAMPO.join(valores[coluna] for coluna in COLUNAS)
 
 
 def ler_linha(linha):
-    """Reconstrói uma Conta a partir de uma linha do arquivo.
+    """Reconstrói uma ContaCorrente a partir de uma linha do arquivo.
 
     Devolve None quando a linha está vazia, é comentário ou está fora do
     formato — assim um arquivo parcialmente corrompido ainda recupera as
@@ -136,41 +165,42 @@ def ler_linha(linha):
         return None
 
     campos = linha_limpa.split(SEPARADOR_DE_CAMPO)
-    if len(campos) != TOTAL_DE_CAMPOS:
+    colunas = FORMATOS_POR_QUANTIDADE.get(len(campos))
+    if colunas is None:
         return None
+
+    # zip junta cada nome de coluna ao seu valor: {"numero": "0001", ...}
+    bruto = {coluna: valor.strip() for coluna, valor in zip(colunas, campos)}
 
     try:
-        conta = Conta(
-            numero=campos[0].strip(),
-            titular=campos[1].strip(),
-            cpf=campos[2].strip(),
-            chave_pix=campos[3].strip(),
-            saldo=float(campos[8]),
-            limite_cartao_credito=float(campos[9]),
-            saldo_dolar=float(campos[12]),
-            saldo_euro=float(campos[13]),
-            saldo_yuan=float(campos[14]),
-        )
-    except ValueError:
-        # Algum campo numérico não era número
+        dados = {
+            "numero": bruto["numero"],
+            "cliente": {
+                "nome": bruto["titular"],
+                "cpf": bruto["cpf"],
+                "email": bruto.get("email", ""),
+                "telefone": bruto.get("telefone", ""),
+            },
+            "chave_pix": bruto["chave_pix"],
+            "salt": bruto["salt"],
+            "pin_hash": bruto["pin_hash"],
+            "bloqueada": bruto["bloqueada"] == "True",
+            "tentativas_falhas": int(bruto["tentativas"]),
+            "saldo": float(bruto["saldo"]),
+            "limite_cartao_credito": float(bruto["limite_cartao"]),
+            "fatura_cartao_credito": float(bruto["fatura_cartao"]),
+            "divida_emprestimo": float(bruto["divida_emprestimo"]),
+            "saldo_dolar": float(bruto["dolar"]),
+            "saldo_euro": float(bruto["euro"]),
+            "saldo_yuan": float(bruto["yuan"]),
+            "bytepoints": float(bruto["bytepoints"]),
+            "cofrinhos": ler_cofrinhos(bruto["cofrinhos"]),
+        }
+        # A própria classe se reconstrói e valida (CPF, saldo não negativo)
+        return ContaCorrente.de_dicionario(dados)
+    except (ValueError, TypeError):
+        # Número que não é número, CPF malformado, saldo negativo...
         return None
-
-    # O construtor gera salt e hash novos a partir do PIN padrão; aqui os
-    # valores gravados são restaurados para que o PIN do cliente continue valendo.
-    conta.salt = campos[4].strip()
-    conta.pin_hash = campos[5].strip()
-    conta.bloqueada = campos[6].strip() == "True"
-
-    try:
-        conta.tentativas_falhas = int(campos[7])
-        conta.fatura_cartao_credito = float(campos[10])
-        conta.divida_emprestimo = float(campos[11])
-        conta.bytepoints = float(campos[15])
-    except ValueError:
-        return None
-
-    conta.cofrinhos = ler_cofrinhos(campos[16])
-    return conta
 
 
 def salvar_contas_txt(contas, caminho=ARQUIVO_CONTAS):
@@ -276,15 +306,21 @@ if __name__ == "__main__":
     ARQUIVO_DE_TESTE = "contas_teste.txt"
 
     originais = [
-        Conta(numero="9001", titular="Teste, da Silva", cpf="999.999.999-99",
-              chave_pix="teste@email.com", pin="4321", saldo=1234.56,
-              limite_cartao_credito=2000.00, saldo_dolar=10.50,
-              cofrinhos_iniciais={"Reserva": (300.00, 0.005)}),
-        Conta(numero="9002", titular="Sem Cofrinho", cpf="888.888.888-88",
-              chave_pix="sem@email.com", pin="1234", saldo=0.0),
+        ContaCorrente(numero="9001",
+                      cliente=Cliente("Teste, da Silva", "999.999.999-99",
+                                      email="teste@email.com",
+                                      telefone="(81) 99999-0000"),
+                      chave_pix="teste@email.com", pin="4321", saldo=1234.56,
+                      limite_cartao_credito=2000.00, saldo_dolar=10.50,
+                      cofrinhos_iniciais={"Reserva": (300.00, 0.005)}),
+        ContaCorrente(numero="9002",
+                      cliente=Cliente("Sem Cofrinho", "888.888.888-88"),
+                      chave_pix="sem@email.com", pin="1234", saldo=0.0),
     ]
-    originais[0].divida_emprestimo = 500.00
-    originais[0].bytepoints = 42.5
+    # Os atributos são privados: dívida e pontos são gerados por operações de
+    # verdade, e não por atribuição direta.
+    originais[0].contratar_emprestimo(500.00, 10)   # gera dívida
+    originais[0].sacar(42.50)                       # gera BytePoints
 
     salvar_contas_txt(originais, ARQUIVO_DE_TESTE)
     recuperadas, ignoradas = carregar_contas_txt_detalhado(ARQUIVO_DE_TESTE)
@@ -294,6 +330,8 @@ if __name__ == "__main__":
 
     for antes, depois in zip(originais, recuperadas):
         print(f"Conta {depois.numero} - {depois.titular}")
+        print(f"  cliente .....: {depois.cliente!r} | {depois.cliente.email or '-'} "
+              f"| {depois.cliente.telefone or '-'}")
         print(f"  saldo .......: {antes.saldo:.2f} -> {depois.saldo:.2f}")
         print(f"  divida ......: {antes.divida_emprestimo:.2f} -> "
               f"{depois.divida_emprestimo:.2f}")

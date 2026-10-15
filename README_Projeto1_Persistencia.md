@@ -3,8 +3,15 @@
 **Disciplina:** BD015 – Algoritmo e Estrutura de Dados
 **Aula 7 –** Persistência de Dados em Arquivos
 **Professor:** Fernando Ferreira de Carvalho
-**Aluno:** Lucas Barreto Rodrigues de Barros e Felipe Saraiva
+**Aluno:** Lucas Barreto Rodrigues de Barros
 **Instituição:** CESAR School
+
+> **Atualização (Aula 8):** com a arquitetura Cliente → ContaCorrente → Banco,
+> a gravação passou a ser responsabilidade do próprio Banco, pelos métodos
+> `salvar_estado()` e `carregar_estado()`. As duas funções deste projeto
+> continuam existindo com os mesmos nomes e são chamadas por esses métodos.
+> O módulo `persistencia.py` (JSON) foi absorvido pelo Banco e removido.
+> Detalhes em `README_Arquitetura.md`.
 
 ---
 
@@ -22,10 +29,10 @@ no boot.
 
 | Requisito do enunciado | Onde foi implementado |
 |---|---|
-| Função `salvar_contas_txt(contas)` | `persistencia_txt.py`, linha 176 |
-| Executada automaticamente ao encerrar o sistema | `main.py` → `encerrar(banco)`, chamada no `finally` do `main()` |
-| Função `carregar_contas_txt()` | `persistencia_txt.py`, linha 223 |
-| Executada no boot para restaurar os saldos | `main.py` → `dar_boot()`, primeira instrução |
+| Função `salvar_contas_txt(contas)` | `persistencia_txt.py`, linha 206 |
+| Executada automaticamente ao encerrar o sistema | `main.py` → `encerrar()` → `Banco.salvar_estado()`, chamada no `finally` do `main()` |
+| Função `carregar_contas_txt()` | `persistencia_txt.py`, linha 253 |
+| Executada no boot para restaurar os saldos | `main.py` → `dar_boot()` → `Banco.carregar_estado()`, primeira leitura |
 | Gravação em arquivo `.txt` | `contas.txt`, formato CSV |
 
 ## Conceitos da Aula 7 aplicados
@@ -42,17 +49,25 @@ são manuais, exatamente como a aula apresenta:
 | `arquivo.write()` | Uma linha por conta, com `\n` ao final |
 | `for linha in arquivo` | Leitura **preguiçosa**, uma linha por vez, em vez de `readlines()` |
 | `.strip()` | Remove o `\n` e espaços de cada linha e de cada campo |
-| `.split(',')` | Separa a linha nos 17 campos |
+| `.split(',')` | Separa a linha nos 19 campos |
 | `FileNotFoundError` | Primeira execução: tratada como situação normal, não como erro |
 
 ## Formato do arquivo
 
-Uma conta por linha, 17 campos separados por vírgula:
+Uma conta por linha, 19 campos separados por vírgula:
 
 ```
-# numero,titular,cpf,chave_pix,salt,pin_hash,bloqueada,tentativas,saldo,limite_cartao,fatura_cartao,divida_emprestimo,dolar,euro,yuan,bytepoints,cofrinhos
-0001,Amanda Silva,111.111.111-11,amanda@email.com,adc043c9...,59904974...,False,0,1150.00,4000.00,0.00,0.00,200.00,150.00,1000.00,17.50,Reserva:5000.00:0.005000;Viagem:1200.00:0.007000
+# numero,titular,cpf,email,telefone,chave_pix,salt,pin_hash,bloqueada,tentativas,saldo,limite_cartao,fatura_cartao,divida_emprestimo,dolar,euro,yuan,bytepoints,cofrinhos
+0001,Amanda Silva,111.111.111-11,amanda@email.com,(81) 98888-1111,amanda@email.com,4f1a0b5c...,b305b3e1...,False,0,1000.00,4000.00,0.00,0.00,200.00,150.00,1000.00,0.00,Reserva:5000.00:0.005000;Viagem:1200.00:0.007000
 ```
+
+A ordem das colunas é definida uma única vez (lista `COLUNAS`) e usada tanto na
+gravação quanto na leitura. Na leitura, `zip(COLUNAS, campos)` junta cada nome
+ao seu valor, então o código lê `bruto["saldo"]` em vez de `campos[10]`.
+
+Um `contas.txt` gravado pela versão anterior, com 17 campos (sem e-mail e
+telefone), continua sendo lido: o número de campos identifica o formato. Na
+próxima gravação ele já sai no formato novo.
 
 A primeira linha começa com `#` e documenta as colunas. O leitor ignora linhas
 que começam com `#`, o que permite comentar o arquivo sem quebrá-lo — uma
@@ -74,7 +89,7 @@ A leitura é um `split(';')` seguido de um `split(':')` em cada pedaço.
 
 ### Por que os textos são "limpos" antes de gravar
 
-Um titular chamado `Silva, Jr.` geraria uma linha com 18 campos em vez de 17, e
+Um titular chamado `Silva, Jr.` geraria uma linha com 20 campos em vez de 19, e
 a conta seria perdida na próxima leitura. A função `limpar_texto()` troca por
 espaço qualquer caractere que sirva de separador (`,` `;` `:` `\n` `\r`) antes
 de a linha ser montada. É a limitação honesta do CSV manual: quem usa vírgula
@@ -104,8 +119,9 @@ inteira embora.
 
 ## Convivência com a persistência em JSON
 
-O projeto AV2 já tinha `persistencia.py`, que grava o estado completo em JSON.
-Os dois módulos agora coexistem, com divisão clara de responsabilidade:
+O projeto AV2 já gravava o estado completo em JSON (hoje dentro de
+`Banco.salvar_estado()`). Os dois formatos coexistem, com divisão clara de
+responsabilidade:
 
 | | `contas.txt` (Projeto 1) | `dados_bytebank.json` (AV2) |
 |---|---|---|
@@ -135,7 +151,7 @@ dois, o sistema sobe com as contas de demonstração.
 
 ## Gravação garantida no encerramento
 
-A chamada de `encerrar()` está dentro de um `finally`:
+A chamada de `encerrar()` (que aciona `banco.salvar_estado()`) está dentro de um `finally`:
 
 ```python
 try:
@@ -162,8 +178,9 @@ python persistencia_txt.py
 Gravadas: 2 | Lidas: 2 | Ignoradas: 0
 
 Conta 9001 - Teste  da Silva
-  saldo .......: 1234.56 -> 1234.56
-  divida ......: 500.00 -> 500.00
+  cliente .....: Cliente(Teste  da Silva, 999.999.999-99) | teste@email.com | (81) 99999-0000
+  saldo .......: 1692.06 -> 1692.06
+  divida ......: 609.50 -> 609.50
   bytepoints ..: 42.50 -> 42.50
   cofrinhos ...: {'Reserva': {'saldo': 300.0, 'taxa_mensal': 0.005}}
   PIN confere .: True
@@ -171,6 +188,10 @@ Conta 9001 - Teste  da Silva
 
 Repare no titular: foi gravado como `Teste, da Silva` e voltou como
 `Teste  da Silva` — a vírgula virou espaço, como esperado.
+
+A dívida e os pontos do teste são gerados por operações de verdade (um
+empréstimo e um saque), porque os atributos da conta são privados e não
+aceitam atribuição direta.
 
 Para testar o sistema inteiro:
 
@@ -184,10 +205,10 @@ python main.py          # o saldo foi restaurado
 
 | Arquivo | Papel |
 |---|---|
-| `persistencia_txt.py` | **Novo.** As duas funções do Projeto 1 |
-| `main.py` | Alterado: `dar_boot()` e `encerrar()` chamam as funções novas |
-| `interface.py` | Alterado: `converter_valor()` passou a aceitar `1.250,50` |
-| `persistencia.py` | Inalterado |
+| `persistencia_txt.py` | As duas funções do Projeto 1 |
+| `banco.py` | `salvar_estado()` e `carregar_estado()` chamam as funções do Projeto 1 |
+| `main.py` | `dar_boot()` e `encerrar()` acionam os métodos do Banco |
+| `interface.py` | `converter_valor()` aceita `1.250,50` |
 | `contas.txt` | Gerado em tempo de execução (está no `.gitignore`) |
 
 ## Correção adicional

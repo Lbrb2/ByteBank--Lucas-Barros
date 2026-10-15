@@ -5,31 +5,41 @@ Ponto de entrada do sistema. Execute com: python main.py
 """
 
 from banco import Banco
-from conta import Conta
+from cliente import Cliente
+from conta import ContaCorrente
 from interface import Interface
 from open_banking import InstituicaoParceira
-import persistencia
-import persistencia_txt
 
 
 def carregar_contas_ficticias(banco):
-    """Cadastra as contas de demonstração usadas para testar o sistema."""
-    banco.adicionar_conta(Conta(
-        numero="0001", titular="Amanda Silva", cpf="111.111.111-11",
+    """Cadastra as contas de demonstração usadas para testar o sistema.
+
+    Cada conta recebe um objeto Cliente: primeiro se cria a pessoa, depois a
+    conta que pertence a ela.
+    """
+    amanda = Cliente("Amanda Silva", "111.111.111-11",
+                     email="amanda@email.com", telefone="(81) 98888-1111")
+    caio = Cliente("Caio Ferreira", "222.222.222-22",
+                   email="caio@email.com", telefone="(81) 98888-2222")
+    douglas = Cliente("Douglas Alves", "333.333.333-33",
+                      email="douglas@email.com", telefone="(81) 98888-3333")
+
+    banco.adicionar_conta(ContaCorrente(
+        numero="0001", cliente=amanda,
         chave_pix="amanda@email.com", pin="1111", saldo=1000.00,
         limite_cartao_credito=4000.00,
         saldo_dolar=200.00, saldo_euro=150.00, saldo_yuan=1000.00,
         cofrinhos_iniciais={"Reserva": (5000.00, 0.005), "Viagem": (1200.00, 0.007)}
     ))
-    banco.adicionar_conta(Conta(
-        numero="0002", titular="Caio Ferreira", cpf="222.222.222-22",
+    banco.adicionar_conta(ContaCorrente(
+        numero="0002", cliente=caio,
         chave_pix="caio@email.com", pin="2222", saldo=2500.50,
         limite_cartao_credito=2500.00,
         saldo_dolar=300.00, saldo_euro=200.00, saldo_yuan=1500.00,
         cofrinhos_iniciais={"Reserva": (3000.00, 0.005)}
     ))
-    banco.adicionar_conta(Conta(
-        numero="0003", titular="Douglas Alves", cpf="333.333.333-33",
+    banco.adicionar_conta(ContaCorrente(
+        numero="0003", cliente=douglas,
         chave_pix="douglas@email.com", pin="3333", saldo=320.00,
         limite_cartao_credito=3000.00,
         saldo_dolar=100.00, saldo_euro=80.00, saldo_yuan=500.00,
@@ -64,65 +74,32 @@ def carregar_instituicoes_parceiras(banco):
     return banco
 
 
-def montar_banco_a_partir_das_contas(contas):
-    """Cria um banco já populado com as contas lidas do arquivo de texto."""
-    banco = Banco("ByteBank")
-    for conta in contas:
-        banco.adicionar_conta(conta)
-    carregar_instituicoes_parceiras(banco)
-    return banco
-
-
 def dar_boot():
-    """Restaura o estado do banco a partir dos arquivos em disco.
+    """Restaura o banco a partir do disco ou, na primeira execução, cria o
+    banco com as contas de demonstração. Devolve o banco pronto para uso.
 
-    São lidas as duas fontes de persistência:
-
-      - 'contas.txt'  -> contas e saldos (Projeto 1 da Aula 7)
-      - 'dados_bytebank.json' -> estado completo, incluindo o extrato de
-        transações e os consentimentos de Open Banking, que são estruturas
-        aninhadas e não cabem em um CSV plano.
-
-    Quando os dois existem, o JSON é usado porque contém tudo o que o TXT
-    contém e mais; o TXT então serve de conferência independente dos saldos.
-    Quando só o TXT existe, ele reconstrói o banco sozinho. Sem nenhum dos
-    dois, o sistema sobe com as contas de demonstração.
-
-    Devolve o banco pronto para uso.
+    Quem sabe ler o próprio estado é o Banco (Banco.carregar_estado); aqui só
+    se decide o que fazer quando não há nada gravado.
     """
-    contas_txt, ignoradas = persistencia_txt.carregar_contas_txt_detalhado()
-    print(persistencia_txt.resumo_do_carregamento(contas_txt, ignoradas))
+    banco, mensagem = Banco.carregar_estado()
+    print(mensagem)
 
-    banco, mensagem_json = persistencia.carregar()
+    if banco is None:
+        print("Iniciando com as contas de demonstração.")
+        banco = carregar_contas_ficticias(Banco("ByteBank"))
 
-    if banco is not None:
-        print(mensagem_json)
-        divergencias = persistencia_txt.conferir_saldos(contas_txt, banco.contas)
-        for divergencia in divergencias:
-            print(f"[AVISO] Divergência entre os arquivos: {divergencia}")
-        print()
-        return banco
+    # O arquivo TXT guarda só as contas. Quando o banco veio dele (ou de um
+    # JSON antigo sem Open Banking), as instituições parceiras são recriadas.
+    if not banco.diretorio.listar():
+        carregar_instituicoes_parceiras(banco)
 
-    if contas_txt:
-        print("Estado reconstruído a partir do arquivo de texto.\n")
-        return montar_banco_a_partir_das_contas(contas_txt)
-
-    print(f"{mensagem_json} Iniciando com as contas de demonstração.\n")
-    banco = carregar_contas_ficticias(Banco("ByteBank"))
-    carregar_instituicoes_parceiras(banco)
+    print()
     return banco
 
 
 def encerrar(banco):
-    """Grava o estado do banco nos dois arquivos antes de o programa sair."""
-    if persistencia_txt.salvar_contas_txt(banco.contas):
-        print(f"{len(banco.contas)} conta(s) gravada(s) em "
-              f"'{persistencia_txt.ARQUIVO_CONTAS}'.")
-    else:
-        print(f"[ERRO] Não foi possível gravar "
-              f"'{persistencia_txt.ARQUIVO_CONTAS}'.")
-
-    sucesso, mensagem = persistencia.salvar(banco)
+    """Pede ao Banco que salve o próprio estado antes de o programa sair."""
+    _, mensagem = banco.salvar_estado()
     print(mensagem)
 
 
