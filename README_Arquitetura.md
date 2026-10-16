@@ -16,24 +16,50 @@
 ┌──────────────┐  possui 1   ┌────────────────────┐  pertence a  ┌──────────────────┐
 │   Cliente    │────────────▶│   ContaCorrente    │─────────────▶│      Banco       │──▶ disco
 │ nome, CPF,   │             │ saldo (privado),   │    muitas    │ todas as contas, │   (TXT +
-│ e-mail, tel. │             │ limite, o Cliente  │              │ salvar_estado()  │    JSON)
-└──────────────┘             └────────────────────┘              └──────────────────┘
+│ contatos     │             │ limite, o Cliente  │              │ salvar_estado()  │    JSON)
+└──────────────┘             └─────────┬──────────┘              └──────────────────┘
+                                       │ tem 1
+                             ┌─────────▼──────────┐
+                             │  CartaoDeCredito   │
+                             │ limite, saldo,     │
+                             │ número, CVV...     │
+                             └────────────────────┘
 ```
 
-| Requisito do slide | Onde está |
+### Slide do Desafio Final
+
+| Requisito | Onde está |
 |---|---|
 | Classe `Cliente` com CPF, nome e dados de contato | `cliente.py` |
 | Classe `ContaCorrente` | `conta.py` |
 | Saldo **privado** | `self.__saldo`, exposto só para leitura por `@property` |
-| Limite | `self.__limite_cartao_credito`, somente leitura |
+| Limite | `self.__limite` (cheque especial), somente leitura |
 | A conta guarda a **instância** do Cliente dono | `self.__cliente`, recebido no construtor |
 | `Banco` orquestra múltiplas contas | `banco.py` |
 | `Banco.salvar_estado()` persiste toda a malha | `banco.py`, grava `dados_bytebank.json` e `contas.txt` |
 | Blindar os atributos | **todas** as classes de dados: nenhum atributo pode ser alterado de fora |
 
+### Exercícios do Classroom
+
+| Exercício | Pedido | No ByteBank |
+|---|---|---|
+| **1 – Cliente** | `CPF`, `nome`, `contatos` | `cpf`, `nome` e `contatos` (e-mail e telefone) |
+| | `consultar_contatos()` | `Cliente.consultar_contatos()` |
+| **2 – Conta corrente** | `id_cliente` | `ContaCorrente.id_cliente` (o CPF do cliente dono) |
+| | `saldo`, `limite` | `saldo` e `limite` (cheque especial), somente leitura |
+| | `sacar()`, `depositar()` | já existiam; o saque agora usa o limite |
+| | `consultar_saldo()`, `consultar_limite()` | novos |
+| | `aumentar_limite()` | novo, com teto e estorno |
+| **3 – Cartão de crédito** | `nome`, `numero`, `validade`, `CVV`, `limite`, `data_pagamento`, `saldo`, outros | `cartao_credito.py` — ver a seção 3 |
+| | `consultar_limite()`, `pagar()`, `parcelar_saldo()`, `consultar_saldo()` | idem |
+
+O exercício escreve `Consutar_Contatos()`. No código o nome segue o padrão do
+Python (minúsculas, palavras separadas por `_`) e a grafia correta:
+`consultar_contatos()`.
+
 ---
 
-## 1. A classe `Cliente`
+## 1. A classe `Cliente` (exercício 1)
 
 Separa **quem a pessoa é** de **o que ela tem**. A conta guarda dinheiro; o
 cliente guarda identidade e contato.
@@ -51,6 +77,18 @@ conta = ContaCorrente("0001", amanda, "amanda@email.com", saldo=1000.00)
 | `email` | setter que **valida** | Opcional; se informado, precisa ter `@` |
 | `telefone` | setter que **valida** | Opcional; se informado, precisa de ao menos 8 dígitos |
 
+Os contatos podem ser lidos juntos, em `cliente.contatos` (um dicionário com
+e-mail e telefone), ou como texto pronto, em `cliente.consultar_contatos()`:
+
+```
+Contatos de Amanda Silva
+E-mail: amanda@email.com
+Telefone: (81) 98888-1111
+```
+
+O dicionário de `contatos` é criado a cada leitura. Alterá-lo não altera o
+cliente: para mudar o e-mail, existe o setter, que valida.
+
 **Blindar não é proibir: é controlar.** O CPF não muda nunca; o e-mail muda, mas
 só para um valor válido. O construtor usa os próprios setters
 (`self.nome = nome`), então a regra existe em um único lugar.
@@ -61,7 +99,135 @@ cálculo oficial recusaria.
 
 ---
 
-## 2. As três camadas da blindagem
+## 2. A conta corrente (exercício 2)
+
+### `id_cliente`
+
+A conta guarda o **objeto** `Cliente` inteiro (composição), e não só um número
+que aponte para ele. O `id_cliente` é o identificador desse cliente, o CPF:
+
+```python
+conta.cliente       # o objeto Cliente
+conta.id_cliente    # '111.111.111-11'
+```
+
+É pelo CPF que o Banco encontra as contas de uma pessoa e que o Open Banking
+liga o cliente às outras instituições.
+
+### O limite é o cheque especial
+
+Com o cartão em classe própria, o `limite` da conta corrente passou a ser o
+**limite da conta**: o quanto o saldo pode ficar negativo.
+
+```
+saldo disponível = saldo + limite
+```
+
+| Saldo | Limite | Disponível | Saque de R$ 1.300 |
+|---|---|---|---|
+| R$ 1.000 | R$ 500 | R$ 1.500 | aceito; saldo fica em **-R$ 300** |
+| -R$ 300 | R$ 500 | R$ 200 | recusado |
+
+O limite vale para **todo débito** (saque, PIX, boleto, fatura, empréstimo,
+cofrinho, compra de moeda), como num banco de verdade: a regra está num lugar
+só, a property `saldo_disponivel`.
+
+Com limite zero, o comportamento é exatamente o de antes. Foi assim que a
+mudança foi verificada: o teste diferencial rodou com as contas sem limite e
+deu resultado idêntico ao da versão anterior.
+
+| Método | O que faz |
+|---|---|
+| `consultar_saldo()` | saldo, limite e saldo disponível; avisa quando o limite está em uso |
+| `consultar_limite()` | limite total, utilizado e disponível |
+| `aumentar_limite(valor)` | soma ao limite, até o máximo de R$ 5.000,00 |
+
+O aumento fica no extrato e **pode ser estornado**, mas só se o limite extra
+não estiver em uso. Com R$ 1.500 de limite e saldo em -R$ 800, desfazer um
+aumento de R$ 1.000 deixaria a conta R$ 300 além do limite, então o estorno é
+recusado.
+
+O estorno de outras operações também respeita o limite: o saldo pode ficar
+negativo, mas nunca abaixo de `-limite`. Por exemplo, se o recebedor de um PIX
+já gastou o dinheiro e o estorno o levaria além do limite dele, o estorno é
+recusado e as duas contas ficam como estavam.
+
+Valores negativos aparecem no padrão brasileiro: **-R$ 300,00**.
+
+---
+
+## 3. A classe `CartaoDeCredito` (exercício 3)
+
+| Pedido no exercício | Na classe |
+|---|---|
+| `nome` | nome impresso, em maiúsculas (vem do `Cliente`) |
+| `numero` | 16 dígitos, com dígito verificador de Luhn, o mesmo cálculo dos cartões reais |
+| `validade` | `"MM/AA"`, 5 anos após a emissão; cartão vencido recusa compras |
+| `CVV` | guardado **só como hash**, como o PIN; existe `confere_cvv()`, mas nenhuma forma de lê-lo |
+| `limite` | o máximo que o saldo devedor pode alcançar |
+| `data_pagamento` | dia do mês em que a fatura vence (1 a 28) |
+| `saldo` | o que o cliente **deve** no cartão |
+| outros | plano de parcelamento e o total já pago |
+| `consultar_limite()` | limite total, utilizado e disponível |
+| `pagar(valor)` | paga uma compra **com** o cartão: confere valor, validade e limite |
+| `parcelar_saldo(parcelas)` | divide a fatura em 2 a 12 vezes, com juros de 4% ao mês |
+| `consultar_saldo()` | fatura atual, próximo vencimento e parcelamento |
+
+### A conta **tem** um cartão, e não o entrega
+
+Antes, o limite e a fatura eram atributos soltos da `ContaCorrente`. Agora a
+conta guarda um objeto `CartaoDeCredito` (composição, como faz com o `Cliente`):
+
+```python
+self.__cartao = CartaoDeCredito(cliente.nome, limite_cartao_credito)
+```
+
+O cartão tem métodos como `receber_pagamento(valor)`, que abate a fatura. Quem
+deve chamá-lo é a conta, **depois** de tirar o dinheiro do saldo. Se a conta
+tivesse uma property `conta.cartao`, qualquer um poderia fazer:
+
+```python
+conta.cartao.receber_pagamento(5000)    # fatura quitada sem pagar nada
+```
+
+Por isso não existe `conta.cartao`. A conta oferece só informações
+(`resumo_cartao()`, `dados_cartao()`, `fatura_cartao_credito`) e operações que
+ela mesma controla:
+
+| Na conta | O que faz |
+|---|---|
+| `comprar_no_cartao(valor, categoria)` | o cartão aprova (`pagar`); a conta registra no extrato e dá os pontos |
+| `pagar_fatura(valor)` | confere tudo, tira o dinheiro da conta e só então o cartão abate a fatura |
+| `simular_parcelamento_fatura(n)` | mostra parcelas e total antes de confirmar |
+| `parcelar_fatura(n)` | parcela e registra no extrato |
+
+### Estorno com o cartão
+
+O estorno não pode mexer no saldo do cartão diretamente, porque é privado do
+cartão. A conta pede a operação correspondente, e o cartão pode recusar:
+
+| Transação | Estornar | Refazer |
+|---|---|---|
+| `COMPRA_CARTAO` | `cartao.estornar_compra(valor)` | `cartao.pagar(valor)` |
+| `PAGAMENTO_FATURA` | `cartao.estornar_pagamento(valor)` | `cartao.receber_pagamento(valor)` |
+
+Cada operação tem trava própria. `estornar_pagamento` só aceita até o total
+efetivamente pago, para não ser possível "desfazer" um pagamento que nunca
+existiu.
+
+Para a atomicidade (se algo falhar, nada muda), a foto da conta tirada antes do
+estorno inclui uma **cópia completa do cartão** (`copy.deepcopy`). Para
+desfazer, a conta volta a usar a cópia, sem precisar de nenhum método que
+altere o cartão por fora.
+
+O **parcelamento não pode ser estornado**, como num banco de verdade: os juros
+já fazem parte da dívida. Já o estorno do pagamento que **quitou** um
+parcelamento devolve a dívida *e* o plano de parcelas, que o cartão guarda para
+esse caso.
+
+---
+
+## 4. As três camadas da blindagem
 
 Proteger de verdade exigiu fechar três portas diferentes. Fechar só a primeira
 daria uma blindagem de fachada.
@@ -179,7 +345,7 @@ que tinha apagado a fila.
 AttributeError: 'Banco' object has no attribute 'fila_boletos' and no __dict__ for setting new attributes
 ```
 
-Todas as classes têm `__slots__`: `Cliente`, `ContaCorrente`, `Transacao`,
+Todas as classes têm `__slots__`: `Cliente`, `ContaCorrente`, `CartaoDeCredito`, `Transacao`,
 `Banco`, `InstituicaoParceira`, `Consentimento`, `Diretorio` e `Interface`.
 
 ### Sobre o `__` em Python
@@ -213,7 +379,7 @@ privado `__definir_campo_financeiro` escreve no nome verdadeiro
 
 ---
 
-## 3. `Banco.salvar_estado()` e `Banco.carregar_estado()`
+## 5. `Banco.salvar_estado()` e `Banco.carregar_estado()`
 
 O Banco é o contêiner que conhece todas as contas, então é ele quem sabe se
 gravar por inteiro. O antigo `persistencia.py` foi absorvido pela classe e
@@ -238,6 +404,8 @@ O `persistencia_txt.py` não toca em nenhum atributo privado: grava a partir de
 |---|---|
 | JSON de antes da classe `Cliente` (titular e CPF soltos) | `de_dicionario` cria o `Cliente` a partir deles |
 | `contas.txt` de 17 colunas (sem e-mail e telefone) | o número de colunas identifica o formato |
+| arquivos de antes do limite da conta | a conta abre com limite zero; ele pode ser aumentado pelo menu |
+| arquivos de antes da classe `CartaoDeCredito` (só limite e fatura) | o cartão é criado com o limite e a fatura gravados; o total já pago é reconstruído a partir dos `PAGAMENTO_FATURA` do extrato, para que pagamentos antigos possam ser estornados |
 | JSON sem o registro do que cada parceira portou | reconstruído a partir dos extratos: toda `PORTABILIDADE` ainda no histórico é dinheiro que saiu da parceira e não voltou |
 
 Sem a última linha, uma portabilidade feita antes desta atualização não
@@ -246,7 +414,7 @@ que mostrou isso.
 
 ---
 
-## 4. Como foi testado
+## 6. Como foi testado
 
 **53 de 53 tentativas de alteração indevida barradas**, entre elas:
 
@@ -286,6 +454,25 @@ portabilidade feita na versão anterior pode ser estornada; portar → fechar �
 abrir → estornar → refazer funciona; linha duplicada no `contas.txt` é
 ignorada com aviso; `Ctrl+D` no meio de uma operação ainda grava os arquivos.
 
+**Cartão de crédito:** compra, pagamento parcial e total, estorno e refazer
+de cada um; estorno de compra recusado quando a fatura já foi paga; parcelamento
+recusado acima de 12 vezes, quando os juros estouram o limite ou quando já há
+um parcelamento; estorno do parcelamento recusado; estorno da quitação
+devolvendo o plano de parcelas; recusa do cartão desfazendo tudo (rollback);
+cartão gravado e restaurado pelo JSON e pelo TXT (número, validade, hash do
+CVV e parcelamento); arquivos da versão anterior com fatura e pagamento,
+inclusive o estorno do pagamento antigo. Na regressão diferencial, a única
+mudança é o texto de "Consultar Limite e Fatura", que agora mostra o cartão.
+
+**Exercícios 1 e 2:** `consultar_contatos()`; saque, PIX, boleto e compra de
+moeda usando o limite; recusa além do limite; aumento de limite dentro e fora
+do teto; estorno do aumento aceito quando só o limite base está em uso e
+recusado quando o limite extra está em uso; estorno de PIX recusado quando
+levaria o recebedor além do limite; saldo negativo gravado e restaurado pelo
+JSON e pelo TXT; linha de TXT editada com saldo abaixo do limite é ignorada.
+Com as contas sem limite, a regressão diferencial é idêntica à da versão
+anterior.
+
 **Pelo menu:** PIX de uma conta, reinício do sistema, estorno do PIX pela conta
 que **recebeu** — as duas contas voltam juntas aos valores originais.
 
@@ -295,16 +482,18 @@ que **recebeu** — as duas contas voltam juntas aos valores originais.
 
 | Arquivo | Situação |
 |---|---|
-| `cliente.py` | **Novo** — classe `Cliente` |
-| `conta.py` | `ContaCorrente`: todos os atributos privados, operações entre contas, auxiliares privados |
+| `cliente.py` | **Novo** — classe `Cliente`, com `consultar_contatos()` |
+| `cartao_credito.py` | **Novo** — classe `CartaoDeCredito` |
+| `conta.py` | `ContaCorrente`: todos os atributos privados, operações entre contas, auxiliares privados; o cartão passou para a classe própria; limite da conta, `id_cliente`, `consultar_saldo()`, `consultar_limite()` e `aumentar_limite()` |
 | `banco.py` | atributos e log privados; `salvar_estado()`, `carregar_estado()`; PIX, estorno e refazer delegados à conta |
 | `transacao.py` | `Transacao` imutável |
 | `open_banking.py` | atributos privados; `creditar` virou `devolver`, com registro do que foi portado |
-| `interface.py` | `__slots__`; cadastro pede e-mail e telefone |
-| `persistencia_txt.py` | conversa com a conta só por dicionários; colunas de e-mail e telefone |
+| `interface.py` | `__slots__`; cadastro pede e-mail e telefone; submenu do cartão com parcelamento e dados do cartão; consultar e aumentar o limite da conta; meus dados de contato |
+| `persistencia_txt.py` | conversa com a conta só por dicionários; colunas de e-mail, telefone, limite da conta e do cartão |
 | `main.py` | contas de demonstração com `Cliente`; boot e encerramento pelo Banco |
 | `persistencia.py` | **Removido** — absorvido por `Banco.salvar_estado()` |
-| `formatacao.py`, `seguranca.py` | Inalterados |
+| `formatacao.py` | valores negativos no padrão brasileiro (-R$ 300,00) |
+| `seguranca.py` | Inalterado |
 
 ## Como testar
 

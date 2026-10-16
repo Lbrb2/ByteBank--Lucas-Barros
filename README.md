@@ -20,11 +20,11 @@ python main.py
 
 ### Contas de demonstração
 
-| Conta | Titular | CPF | PIN | Saldo | Cofrinhos |
-|---|---|---|---|---|---|
-| 0001 | Amanda Silva | 111.111.111-11 | **1111** | R$ 1.000,00 | Reserva, Viagem |
-| 0002 | Caio Ferreira | 222.222.222-22 | **2222** | R$ 2.500,50 | Reserva |
-| 0003 | Douglas Alves | 333.333.333-33 | **3333** | R$ 320,00 | Emergência |
+| Conta | Titular | CPF | PIN | Saldo | Limite da conta | Cofrinhos |
+|---|---|---|---|---|---|---|
+| 0001 | Amanda Silva | 111.111.111-11 | **1111** | R$ 1.000,00 | R$ 500,00 | Reserva, Viagem |
+| 0002 | Caio Ferreira | 222.222.222-22 | **2222** | R$ 2.500,50 | R$ 1.000,00 | Reserva |
+| 0003 | Douglas Alves | 333.333.333-33 | **3333** | R$ 320,00 | R$ 300,00 | Emergência |
 
 O login aceita **número da conta ou CPF**, seguido do PIN.
 
@@ -34,6 +34,7 @@ O login aceita **número da conta ou CPF**, seguido do PIN.
 |---|---|
 | `main.py` | Ponto de entrada: carrega os dados e inicia a interface |
 | `cliente.py` | Classe `Cliente` — nome, CPF e contato do titular |
+| `cartao_credito.py` | Classe `CartaoDeCredito` — número, validade, CVV, limite, fatura e parcelamento |
 | `conta.py` | Classe `ContaCorrente` — dados e operações de uma conta, incluindo o PIX e o estorno entre duas contas |
 | `banco.py` | Classe `Banco` — coleção de contas, fila, log, Open Banking e `salvar_estado()` |
 | `interface.py` | Classe `Interface` — menus, leitura de entrada e exibição |
@@ -45,9 +46,11 @@ O login aceita **número da conta ou CPF**, seguido do PIN.
 
 **Separação entre lógica e apresentação:** os métodos de `ContaCorrente` e `Banco` não imprimem nada — devolvem `(sucesso, mensagem)`. Quem exibe é a `Interface`. Isso mantém as regras de negócio testáveis de forma independente da tela.
 
-**Composição:** cada `ContaCorrente` guarda a instância do `Cliente` dono, e o `Banco` guarda todas as contas (Cliente → ContaCorrente → Banco).
+**Composição:** cada `ContaCorrente` guarda a instância do `Cliente` dono e o seu `CartaoDeCredito`, e o `Banco` guarda todas as contas (Cliente → ContaCorrente → Banco). O cartão fica dentro da conta e nunca é entregue para fora: só a conta pode abater a fatura, depois de debitar o dinheiro.
 
 **Divisão entre `ContaCorrente` e `Banco`:** a conta faz tudo o que altera o próprio estado — depósito, saque, cofrinhos, cartão, câmbio, empréstimo e também o PIX e o estorno, que mexem em duas contas ao mesmo tempo. O `Banco` localiza as contas, coordena as instituições parceiras, mantém a fila de boletos e registra o log.
+
+**Limite da conta (cheque especial):** cada conta tem um `limite` próprio, diferente do limite do cartão. O saldo pode ficar negativo até esse valor, e todos os débitos usam o saldo disponível (`saldo + limite`). O limite pode ser consultado e aumentado pelo menu, até R$ 5.000,00.
 
 **Encapsulamento:** todos os atributos de todas as classes de dados são privados (`__`), lidos por `@property` sem setter, e as classes usam `__slots__`. Nada pode ser alterado por fora: `conta.saldo = 0` gera `AttributeError`. Os detalhes estão em [`README_Arquitetura.md`](README_Arquitetura.md).
 
@@ -79,7 +82,7 @@ Subcontas nomeadas (dicionário `cofrinhos`), cada uma com saldo e **taxa de ren
 Boletos e compras no cartão são classificados em 7 categorias. O relatório faz um **GROUP BY em memória** sobre a pilha, acumulando por categoria e exibindo valor, percentual e gráfico de barras, ordenado da maior despesa para a menor. Como lê a própria pilha, estornar um gasto o remove do relatório automaticamente.
 
 ### 3. Cartão de Crédito e Fatura
-Limite aprovado, compras no crédito e pagamento de fatura com o saldo corrente. Limite total, limite disponível e fatura em aberto são controlados separadamente.
+Classe própria (`CartaoDeCredito`), com número de 16 dígitos validado pelo algoritmo de Luhn, validade, CVV guardado só como hash, limite, dia de pagamento e saldo devedor. Compras no crédito, pagamento de fatura com o saldo corrente e **parcelamento da fatura** de 2 a 12 vezes, com juros de 4% ao mês e simulação antes de confirmar. Limite total, limite disponível e fatura em aberto são controlados separadamente.
 
 ### 4. Carteira Multimoedas (Câmbio)
 Saldos em dólar, euro e yuan com tabela de taxas. Permite comprar, vender e fazer câmbio direto entre duas moedas quaisquer — incluindo o real como uma das pontas.
@@ -136,6 +139,8 @@ Acesso protegido por PIN de 4 dígitos, com bloqueio após 3 tentativas erradas 
     [2] Depositar                    [6] Refazer Transação Estornada
     [3] Sacar                        [7] Histórico de Operações
     [4] Ver Extrato (Pilha)          [8] Relatório de Gastos por Categoria
+                                     [9] Consultar Limite da Conta
+                                     [10] Aumentar Limite da Conta
 
 [2] Transferências e Pagamentos
     [1] Transferir (PIX)             [4] Ver Fila de Boletos
@@ -149,8 +154,9 @@ Acesso protegido por PIN de 4 dígitos, com bloqueio após 3 tentativas erradas 
     [4] Resgatar Dinheiro
 
 [4] Cartão de Crédito
-    [1] Consultar Limite e Fatura    [3] Pagar Fatura
-    [2] Comprar no Cartão de Crédito
+    [1] Consultar Limite e Fatura    [4] Simular Parcelamento da Fatura
+    [2] Comprar no Cartão de Crédito [5] Parcelar Fatura
+    [3] Pagar Fatura                 [6] Dados do Cartão
 
 [5] Moedas Estrangeiras
     [1] Consultar Saldo              [3] Vender Moeda Estrangeira
@@ -172,7 +178,7 @@ Acesso protegido por PIN de 4 dígitos, com bloqueio após 3 tentativas erradas 
 
 [9] Cadastro e Acesso
     [1] Cadastrar Nova Conta         [3] Trocar de Conta
-    [2] Alterar meu PIN
+    [2] Alterar meu PIN              [4] Meus Dados de Contato
 
 [0] Sair
 ```
@@ -184,6 +190,7 @@ As regras de negócio ficam em constantes no topo de `conta.py`, fáceis de ajus
 | Constante | Valor | Significado |
 |---|---|---|
 | `LIMITE_MAXIMO_SAQUE_POR_OPERACAO` | R$ 2.000,00 | Teto por saque |
+| `LIMITE_MAXIMO_DA_CONTA` | R$ 5.000,00 | Teto do limite da conta (cheque especial) |
 | `TAXA_JUROS_EMPRESTIMO_MENSAL` | 2% a.m. | Juros compostos do empréstimo |
 | `MULTIPLICADOR_CREDITO_PRE_APROVADO` | 3× | Crédito sobre o patrimônio líquido |
 | `MAXIMO_PARCELAS_EMPRESTIMO` | 24 | Parcelamento máximo |
@@ -192,6 +199,8 @@ As regras de negócio ficam em constantes no topo de `conta.py`, fáceis de ajus
 | `PONTOS_PARA_UM_REAL` | 100 | Pontos equivalentes a R$ 1,00 |
 | `MAXIMO_TENTATIVAS_PIN` | 3 | Tentativas antes do bloqueio |
 | `VALIDADE_PADRAO_DIAS` | 365 | Validade do consentimento (em `open_banking.py`) |
+| `TAXA_JUROS_PARCELAMENTO_MENSAL` | 4% a.m. | Juros do parcelamento da fatura (em `cartao_credito.py`) |
+| `MAXIMO_PARCELAS` | 12 | Máximo de parcelas da fatura (em `cartao_credito.py`) |
 
 ## Observações
 

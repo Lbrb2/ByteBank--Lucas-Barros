@@ -94,6 +94,20 @@ class Cliente:
             raise ValueError(f"Telefone inválido: '{texto}'.")
         self.__telefone = texto
 
+    # ---------------- Contatos (exercício 1) ----------------
+
+    @property
+    def contatos(self):
+        """Os dados de contato reunidos. É um dicionário novo a cada leitura:
+        alterá-lo não altera o cliente (para isso existem os setters)."""
+        return {"email": self.__email, "telefone": self.__telefone}
+
+    def consultar_contatos(self):
+        nao_informado = "não informado"
+        return (f"Contatos de {self.__nome}\n"
+                f"E-mail: {self.__email or nao_informado}\n"
+                f"Telefone: {self.__telefone or nao_informado}")
+
     # ---------------- Gravação em arquivo ----------------
 
     def para_dicionario(self):

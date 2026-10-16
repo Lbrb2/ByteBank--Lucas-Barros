@@ -32,6 +32,8 @@ from formatacao import (formatar_reais, formatar_numero, formatar_valor_moeda,
                         linha_separadora, linha_titulo)
 from transacao import Transacao
 from cliente import Cliente
+from cartao_credito import CartaoDeCredito
+import copy
 import seguranca
 from open_banking import Consentimento
 from datetime import datetime, timedelta
@@ -48,6 +50,8 @@ TAXA_JUROS_EMPRESTIMO_MENSAL = 0.02  # 2% ao mês
 MULTIPLICADOR_CREDITO_PRE_APROVADO = 3
 MAXIMO_PARCELAS_EMPRESTIMO = 24
 LIMITE_MAXIMO_SAQUE_POR_OPERACAO = 2000.00
+# Limite da conta corrente (cheque especial): quanto o saldo pode ficar negativo
+LIMITE_MAXIMO_DA_CONTA = 5000.00
 
 # Categorias usadas para classificar os gastos (relatório GROUP BY em memória)
 CATEGORIAS_GASTO = [
@@ -82,25 +86,32 @@ class ContaCorrente:
     # Lista fechada de atributos. Sem ela, 'objeto.atributo_novo = x' não
     # daria erro: o Python criaria um atributo solto, que a classe nunca lê.
     __slots__ = ("__numero", "__cliente", "__chave_pix", "__salt", "__pin_hash",
-                 "__tentativas_falhas", "__bloqueada", "__saldo",
-                 "__limite_cartao_credito", "__fatura_cartao_credito",
+                 "__tentativas_falhas", "__bloqueada", "__saldo", "__limite",
+                 "__cartao",
                  "__divida_emprestimo", "__saldo_dolar", "__saldo_euro",
                  "__saldo_yuan", "__cofrinhos", "__bytepoints", "__historico",
                  "__pilha_refazer", "__consentimentos")
 
+    # Valores que o estorno salva e restaura pelo nome. A fatura do cartão
+    # não está aqui: ela pertence ao CartaoDeCredito, que é salvo inteiro.
     CAMPOS_FINANCEIROS = [
-        "saldo", "fatura_cartao_credito",
-        "divida_emprestimo", "saldo_dolar", "saldo_euro", "saldo_yuan",
-        "bytepoints"
+        "saldo", "limite", "divida_emprestimo", "saldo_dolar", "saldo_euro",
+        "saldo_yuan", "bytepoints"
     ]
 
-    def __init__(self, numero, cliente, chave_pix, saldo=0.0,
+    # Operações que não podem ser desfeitas pelo estorno
+    TIPOS_NAO_ESTORNAVEIS = ("PARCELAMENTO_FATURA",)
+
+    def __init__(self, numero, cliente, chave_pix, saldo=0.0, limite=0.0,
                  limite_cartao_credito=0.0, saldo_dolar=0.0, saldo_euro=0.0,
                  saldo_yuan=0.0, cofrinhos_iniciais=None, pin="0000"):
         if not isinstance(cliente, Cliente):
             raise TypeError("A conta precisa receber uma instância de Cliente.")
         if saldo < 0:
             raise ValueError("Uma conta não pode ser aberta com saldo negativo.")
+        if not 0 <= limite <= LIMITE_MAXIMO_DA_CONTA:
+            raise ValueError(f"O limite da conta deve estar entre R$ 0,00 e "
+                             f"{formatar_reais(LIMITE_MAXIMO_DA_CONTA)}.")
 
         self.__numero = str(numero).strip()
         self.__cliente = cliente   # Composição: a conta guarda o objeto dono
@@ -110,8 +121,11 @@ class ContaCorrente:
         self.__tentativas_falhas = 0
         self.__bloqueada = False
         self.__saldo = saldo
-        self.__limite_cartao_credito = limite_cartao_credito
-        self.__fatura_cartao_credito = 0.0
+        # Limite da conta corrente (cheque especial): o saldo pode ficar
+        # negativo até esse valor. Não confundir com o limite do cartão.
+        self.__limite = limite
+        # Composição: a conta TEM um cartão, que guarda limite e fatura
+        self.__cartao = CartaoDeCredito(cliente.nome, limite_cartao_credito)
         self.__divida_emprestimo = 0.0
         self.__saldo_dolar = saldo_dolar
         self.__saldo_euro = saldo_euro
@@ -175,13 +189,40 @@ class ContaCorrente:
         return self.__cliente.cpf
 
     @property
+    def id_cliente(self):
+        """Identificador do cliente dono da conta (o CPF).
+
+        A conta guarda o objeto Cliente inteiro (composição), não só o
+        identificador. O id_cliente é a forma de referenciar esse cliente
+        fora da conta — é por ele que o Banco busca contas e que o Open
+        Banking liga o cliente às outras instituições.
+        """
+        return self.__cliente.cpf
+
+    @property
+    def limite(self):
+        """Limite da conta corrente (cheque especial)."""
+        return self.__limite
+
+    @property
+    def saldo_disponivel(self):
+        """O que pode ser gasto: o saldo mais o limite da conta."""
+        return self.__saldo + self.__limite
+
+    @property
+    def limite_utilizado(self):
+        """Parte do limite em uso: quanto o saldo está abaixo de zero."""
+        return max(-self.__saldo, 0.0)
+
+    @property
     def saldo(self):
         """Leitura liberada; escrita só pelos métodos da própria conta."""
         return self.__saldo
 
     @property
     def limite_cartao_credito(self):
-        return self.__limite_cartao_credito
+        """Atalho de leitura: quem guarda o limite é o cartão."""
+        return self.__cartao.limite
 
     @property
     def bloqueada(self):
@@ -199,7 +240,13 @@ class ContaCorrente:
 
     @property
     def fatura_cartao_credito(self):
-        return self.__fatura_cartao_credito
+        """Atalho de leitura para o saldo devedor do cartão.
+
+        O cartão em si não tem property: a conta nunca entrega o objeto, só
+        informações sobre ele. Com o objeto em mãos, alguém poderia chamar
+        cartao.receber_pagamento() e quitar a fatura sem pagar nada.
+        """
+        return self.__cartao.saldo
 
     @property
     def divida_emprestimo(self):
@@ -279,9 +326,9 @@ class ContaCorrente:
             return False, "[RECUSADO] Não é possível transferir para a própria conta."
         if valor <= 0:
             return False, "[RECUSADO] O valor da transferência deve ser positivo."
-        if valor > self.__saldo:
+        if valor > self.saldo_disponivel:
             return False, (f"[RECUSADO] Saldo insuficiente. "
-                           f"Saldo disponível: {formatar_reais(self.__saldo)}")
+                           f"Saldo disponível: {formatar_reais(self.saldo_disponivel)}")
 
         self.__saldo -= valor
         destino.__saldo += valor
@@ -325,6 +372,9 @@ class ContaCorrente:
         transacao = self.ultima_transacao()
         if transacao is None:
             return False, "Não há transações no histórico para estornar."
+        if transacao.tipo in ContaCorrente.TIPOS_NAO_ESTORNAVEIS:
+            return False, ("[RECUSADO] O parcelamento da fatura não pode ser estornado: "
+                           "os juros já fazem parte da dívida do cartão.")
 
         espelho, indice_espelho = None, None
         if transacao.tipo in TIPOS_PIX:
@@ -405,10 +455,9 @@ class ContaCorrente:
         todas voltam ao estado em que estavam e o método devolve False.
         """
         fotos = [(conta, conta.__snapshot()) for conta, _ in pares]
-        for conta, transacao in pares:
-            conta.__aplicar_efeito(transacao, sinal)
+        aceitos = [conta.__aplicar_efeito(transacao, sinal) for conta, transacao in pares]
 
-        if any(conta.__tem_valor_negativo() for conta, _ in pares):
+        if not all(aceitos) or any(conta.__tem_valor_negativo() for conta, _ in pares):
             for conta, foto in fotos:
                 conta.__restaurar(foto)
             return False
@@ -417,20 +466,68 @@ class ContaCorrente:
     # ---------------- Consultas ----------------
 
     @property
-    def limite_disponivel(self):
-        return self.__limite_cartao_credito - self.__fatura_cartao_credito
+    def limite_disponivel_cartao(self):
+        return self.__cartao.limite_disponivel
 
-    def resumo_saldo(self):
+    def consultar_saldo(self):
+        linhas = [f"Titular: {self.titular}",
+                  f"Conta: {self.numero} | CPF: {self.cpf}",
+                  f"Saldo atual: {formatar_reais(self.__saldo)}"]
+        if self.__limite:
+            linhas.append(f"Limite da conta: {formatar_reais(self.__limite)}")
+            linhas.append(f"Saldo disponível (saldo + limite): "
+                          f"{formatar_reais(self.saldo_disponivel)}")
+        if self.__saldo < 0:
+            linhas.append(f"[ATENÇÃO] Você está usando "
+                          f"{formatar_reais(self.limite_utilizado)} do limite da conta.")
+        return "\n".join(linhas)
+
+    # Nome usado pela interface nas versões anteriores
+    resumo_saldo = consultar_saldo
+
+    def consultar_limite(self):
         return (f"Titular: {self.titular}\n"
-                f"Conta: {self.numero} | CPF: {self.cpf}\n"
-                f"Saldo atual: {formatar_reais(self.__saldo)}")
+                f"Conta: {self.numero}\n"
+                f"Limite da conta: {formatar_reais(self.__limite)}\n"
+                f"Limite utilizado: {formatar_reais(self.limite_utilizado)}\n"
+                f"Limite disponível: {formatar_reais(self.__limite - self.limite_utilizado)}\n"
+                f"Saldo disponível (saldo + limite): {formatar_reais(self.saldo_disponivel)}")
+
+    def aumentar_limite(self, valor):
+        """Aumenta o limite da conta corrente. Devolve (sucesso, mensagem).
+
+        Fica registrado no extrato, e por isso pode ser estornado — mas só se
+        o limite extra não estiver em uso.
+        """
+        if valor <= 0:
+            return False, "[RECUSADO] O aumento de limite deve ser positivo."
+        if self.__limite + valor > LIMITE_MAXIMO_DA_CONTA + 0.005:
+            return False, (f"[RECUSADO] O limite máximo da conta é "
+                           f"{formatar_reais(LIMITE_MAXIMO_DA_CONTA)}. Limite atual: "
+                           f"{formatar_reais(self.__limite)}.")
+        self.__limite += valor
+        self.__empilhar(Transacao("AUMENTO_LIMITE", valor))
+        return True, (f"[OK] Limite da conta aumentado em {formatar_reais(valor)}.\n"
+                      f"Novo limite: {formatar_reais(self.__limite)}\n"
+                      f"Saldo disponível: {formatar_reais(self.saldo_disponivel)}")
 
     def resumo_cartao(self):
         return (f"Titular: {self.titular}\n"
                 f"Conta: {self.numero}\n"
-                f"Limite total: {formatar_reais(self.__limite_cartao_credito)}\n"
-                f"Fatura atual: {formatar_reais(self.__fatura_cartao_credito)}\n"
-                f"Limite disponível: {formatar_reais(self.limite_disponivel)}")
+                f"Cartão: {self.__cartao.numero_mascarado} | "
+                f"Validade: {self.__cartao.validade}\n"
+                f"{self.__cartao.consultar_limite()}\n"
+                f"{self.__cartao.consultar_saldo()}")
+
+    def dados_cartao(self):
+        """Dados impressos no cartão. O CVV não aparece: ele só existe como
+        hash e não pode ser lido nem pela própria conta."""
+        cartao = self.__cartao
+        return (f"Nome no cartão: {cartao.nome}\n"
+                f"Número: {cartao.numero_mascarado}\n"
+                f"Validade: {cartao.validade}\n"
+                f"CVV: ***\n"
+                f"Dia de pagamento: {cartao.data_pagamento}")
 
     def resumo_emprestimo(self):
         return (f"Titular: {self.titular}\n"
@@ -571,8 +668,9 @@ class ContaCorrente:
         if valor > LIMITE_MAXIMO_SAQUE_POR_OPERACAO:
             return False, (f"[RECUSADO] O valor excede o limite máximo por operação de saque "
                            f"({formatar_reais(LIMITE_MAXIMO_SAQUE_POR_OPERACAO)}).")
-        if valor > self.__saldo:
-            return False, f"[RECUSADO] Saldo insuficiente. Saldo disponível: {formatar_reais(self.__saldo)}"
+        if valor > self.saldo_disponivel:
+            return False, (f"[RECUSADO] Saldo insuficiente. "
+                           f"Saldo disponível: {formatar_reais(self.saldo_disponivel)}")
         self.__saldo -= valor
         pontos = self.__acumular_pontos(valor)
         self.__empilhar(Transacao("SAQUE", valor, pontos_gerados=pontos))
@@ -583,9 +681,9 @@ class ContaCorrente:
     def pagar_boleto(self, descricao, valor, categoria=CATEGORIA_PADRAO):
         if valor <= 0:
             return False, "[RECUSADO] O valor do pagamento deve ser positivo."
-        if valor > self.__saldo:
+        if valor > self.saldo_disponivel:
             return False, (f"[RECUSADO] Saldo insuficiente para pagar o boleto. "
-                           f"Saldo disponível: {formatar_reais(self.__saldo)}")
+                           f"Saldo disponível: {formatar_reais(self.saldo_disponivel)}")
         self.__saldo -= valor
         pontos = self.__acumular_pontos(valor)
         self.__empilhar(Transacao("PAGAMENTO_BOLETO", valor,
@@ -737,9 +835,9 @@ class ContaCorrente:
             return False, f"[RECUSADO] Não existe cofrinho chamado '{nome}'."
         if valor <= 0:
             return False, "[RECUSADO] O valor a guardar deve ser positivo."
-        if valor > self.__saldo:
+        if valor > self.saldo_disponivel:
             return False, (f"[RECUSADO] Saldo insuficiente. "
-                           f"Saldo disponível: {formatar_reais(self.__saldo)}")
+                           f"Saldo disponível: {formatar_reais(self.saldo_disponivel)}")
         self.__saldo -= valor
         self.__cofrinhos[nome]["saldo"] += valor
         self.__empilhar(Transacao("GUARDAR_COFRINHO", valor, cofrinho=nome))
@@ -801,38 +899,62 @@ class ContaCorrente:
     # ---------------- Cartão de crédito ----------------
 
     def comprar_no_cartao(self, valor, categoria=CATEGORIA_PADRAO):
-        if valor <= 0:
-            return False, "[RECUSADO] O valor da compra deve ser positivo."
-        if valor > self.limite_disponivel:
-            return False, (f"[RECUSADO] Limite insuficiente no cartão de crédito. "
-                           f"Limite disponível: {formatar_reais(self.limite_disponivel)}")
-        self.__fatura_cartao_credito += valor
+        """Compra com o cartão. O cartão decide se aprova (valor, validade,
+        limite); a conta registra a compra no extrato e dá os pontos."""
+        sucesso, erro = self.__cartao.pagar(valor)
+        if not sucesso:
+            return False, erro
         pontos = self.__acumular_pontos(valor)
         self.__empilhar(Transacao("COMPRA_CARTAO", valor, categoria=categoria,
-                                pontos_gerados=pontos))
+                                  pontos_gerados=pontos))
         return True, (f"[OK] Compra de {formatar_reais(valor)} realizada no cartão de crédito.\n"
                       f"Categoria: {categoria}\n"
-                      f"Fatura atual: {formatar_reais(self.__fatura_cartao_credito)}\n"
-                      f"Limite disponível: {formatar_reais(self.limite_disponivel)}\n"
+                      f"Fatura atual: {formatar_reais(self.__cartao.saldo)}\n"
+                      f"Limite disponível: {formatar_reais(self.limite_disponivel_cartao)}\n"
                       f"+{formatar_numero(pontos)} BytePoints")
 
     def pagar_fatura(self, valor):
+        """Paga a fatura com o saldo da conta.
+
+        A ordem importa: primeiro tudo é conferido, depois o dinheiro sai da
+        conta e só então o cartão abate a fatura. Assim nunca acontece de a
+        fatura ser abatida sem o dinheiro ter saído.
+        """
         if valor <= 0:
             return False, "[RECUSADO] O valor do pagamento deve ser positivo."
-        if self.__fatura_cartao_credito == 0:
+        if self.__cartao.saldo == 0:
             return False, "Não há fatura pendente para pagar nesta conta."
-        if valor > self.__fatura_cartao_credito:
+        if valor > self.__cartao.saldo + 0.005:
             return False, (f"[RECUSADO] O valor informado é maior que a fatura atual. "
-                           f"Fatura atual: {formatar_reais(self.__fatura_cartao_credito)}")
-        if valor > self.__saldo:
+                           f"Fatura atual: {formatar_reais(self.__cartao.saldo)}")
+        if valor > self.saldo_disponivel:
             return False, (f"[RECUSADO] Saldo insuficiente para pagar a fatura. "
-                           f"Saldo disponível: {formatar_reais(self.__saldo)}")
+                           f"Saldo disponível: {formatar_reais(self.saldo_disponivel)}")
         self.__saldo -= valor
-        self.__fatura_cartao_credito -= valor
+        self.__cartao.receber_pagamento(valor)
         self.__empilhar(Transacao("PAGAMENTO_FATURA", valor))
         return True, (f"[OK] Pagamento de {formatar_reais(valor)} realizado na fatura do cartão de crédito.\n"
                       f"Saldo atual: {formatar_reais(self.__saldo)}\n"
-                      f"Fatura restante: {formatar_reais(self.__fatura_cartao_credito)}")
+                      f"Fatura restante: {formatar_reais(self.__cartao.saldo)}")
+
+    def simular_parcelamento_fatura(self, parcelas):
+        return self.__cartao.simular_parcelamento(parcelas)
+
+    def parcelar_fatura(self, parcelas):
+        """Parcela a fatura do cartão e registra a operação no extrato.
+
+        O parcelamento não pode ser estornado (como num banco de verdade):
+        os juros passam a fazer parte da dívida.
+        """
+        valor_original = self.__cartao.saldo
+        sucesso, mensagem = self.__cartao.parcelar_saldo(parcelas)
+        if not sucesso:
+            return False, mensagem
+        self.__empilhar(Transacao("PARCELAMENTO_FATURA", valor_original,
+                                  parcelas=parcelas,
+                                  valor_parcela=self.__cartao.valor_parcela,
+                                  total=self.__cartao.saldo))
+        return True, mensagem
 
     # ---------------- Empréstimos ----------------
 
@@ -926,9 +1048,9 @@ class ContaCorrente:
         if valor > self.__divida_emprestimo:
             return False, (f"[RECUSADO] O valor informado é maior que a dívida atual. "
                            f"Dívida atual: {formatar_reais(self.__divida_emprestimo)}")
-        if valor > self.__saldo:
+        if valor > self.saldo_disponivel:
             return False, (f"[RECUSADO] Saldo insuficiente para pagar o empréstimo. "
-                           f"Saldo disponível: {formatar_reais(self.__saldo)}")
+                           f"Saldo disponível: {formatar_reais(self.saldo_disponivel)}")
         self.__saldo -= valor
         self.__divida_emprestimo -= valor
         self.__empilhar(Transacao("PAGAMENTO_EMPRESTIMO", valor))
@@ -965,6 +1087,8 @@ class ContaCorrente:
             return False, "[RECUSADO] A quantidade a ser convertida deve ser positiva."
 
         saldo_origem = self.saldo_da_moeda(moeda_origem)
+        if moeda_origem == "real":
+            saldo_origem = self.saldo_disponivel   # em reais, o limite vale
         if quantidade_origem > saldo_origem:
             return False, (f"[RECUSADO] Saldo insuficiente em {moeda_origem}. "
                            f"Saldo disponível: {formatar_valor_moeda(moeda_origem, saldo_origem)}")
@@ -1003,17 +1127,28 @@ class ContaCorrente:
         dados = {campo: getattr(self, campo) for campo in ContaCorrente.CAMPOS_FINANCEIROS}
         # Os cofrinhos são um dicionário aninhado: precisa de cópia própria
         dados["cofrinhos"] = {nome: dict(info) for nome, info in self.__cofrinhos.items()}
+        # O cartão é guardado como uma cópia completa do objeto. Para desfazer,
+        # a conta simplesmente volta a usar a cópia: não precisa de nenhum
+        # método no cartão que altere o saldo dele "por fora".
+        dados["cartao"] = copy.deepcopy(self.__cartao)
         return dados
 
     def __restaurar(self, snapshot):
         for campo, valor in snapshot.items():
             if campo == "cofrinhos":
                 self.__cofrinhos = {nome: dict(info) for nome, info in valor.items()}
+            elif campo == "cartao":
+                self.__cartao = valor
             else:
                 self.__definir_campo_financeiro(campo, valor)
 
     def __tem_valor_negativo(self):
-        if any(getattr(self, campo) < 0 for campo in ContaCorrente.CAMPOS_FINANCEIROS):
+        """Algum valor abaixo do permitido? O saldo pode ficar negativo até
+        o limite da conta; os demais campos não podem ficar abaixo de zero."""
+        if self.__saldo < -self.__limite - 0.005:
+            return True
+        if any(getattr(self, campo) < 0 for campo in ContaCorrente.CAMPOS_FINANCEIROS
+               if campo != "saldo"):
             return True
         return any(dados["saldo"] < 0 for dados in self.__cofrinhos.values())
 
@@ -1031,6 +1166,11 @@ class ContaCorrente:
         Como todo efeito é uma soma ou subtração, inverter o sinal basta para
         obter a operação contrária — por isso estorno e refazer compartilham
         este método em vez de duplicarem a lista de tipos.
+
+        A fatura é a exceção: ela pertence ao cartão, que não deixa a conta
+        mexer no saldo dele diretamente. A conta pede ao cartão a operação
+        correspondente (estornar a compra, receber o pagamento...), e o
+        cartão pode recusar. Devolve False quando o cartão recusou.
         """
         tipo = transacao.tipo
         v = transacao.valor * sinal
@@ -1054,10 +1194,14 @@ class ContaCorrente:
         elif tipo == "PAGAMENTO_BOLETO":
             self.__saldo -= v
         elif tipo == "COMPRA_CARTAO":
-            self.__fatura_cartao_credito += v
+            if sinal > 0:
+                return self.__cartao.pagar(transacao.valor)[0]
+            return self.__cartao.estornar_compra(transacao.valor)[0]
         elif tipo == "PAGAMENTO_FATURA":
             self.__saldo -= v
-            self.__fatura_cartao_credito -= v
+            if sinal > 0:
+                return self.__cartao.receber_pagamento(transacao.valor)[0]
+            return self.__cartao.estornar_pagamento(transacao.valor)[0]
         elif tipo == "CONTRATACAO_EMPRESTIMO":
             self.__saldo += v
             self.__divida_emprestimo += transacao.obter("total_a_pagar") * sinal
@@ -1078,6 +1222,9 @@ class ContaCorrente:
             self.__saldo -= v
         elif tipo == "PIX_RECEBIDO":
             self.__saldo += v
+        elif tipo == "AUMENTO_LIMITE":
+            self.__limite += v
+        return True
 
     def __encontrar_transacao_espelho(self, tipo_espelho, valor, numero_conta_par):
         """Localiza na pilha a transação correspondente ao outro lado de um PIX.
@@ -1103,8 +1250,8 @@ class ContaCorrente:
             "tentativas_falhas": self.__tentativas_falhas,
             "bloqueada": self.__bloqueada,
             "saldo": self.__saldo,
-            "limite_cartao_credito": self.__limite_cartao_credito,
-            "fatura_cartao_credito": self.__fatura_cartao_credito,
+            "limite": self.__limite,
+            "cartao": self.__cartao.para_dicionario(),
             "divida_emprestimo": self.__divida_emprestimo,
             "saldo_dolar": self.__saldo_dolar,
             "saldo_euro": self.__saldo_euro,
@@ -1136,7 +1283,6 @@ class ContaCorrente:
             numero=dados["numero"],
             cliente=cliente,
             chave_pix=dados["chave_pix"],
-            saldo=dados.get("saldo", 0.0),
             limite_cartao_credito=dados.get("limite_cartao_credito", 0.0),
             saldo_dolar=dados.get("saldo_dolar", 0.0),
             saldo_euro=dados.get("saldo_euro", 0.0),
@@ -1148,16 +1294,44 @@ class ContaCorrente:
         elif "pin" in dados:
             # Arquivo de uma versão anterior, com PIN em texto: migra para hash
             conta.__definir_pin(dados["pin"])
+        # O saldo é definido depois do limite: com cheque especial, um saldo
+        # negativo gravado no arquivo é válido, desde que dentro do limite.
+        conta.__limite = dados.get("limite", 0.0)
+        saldo = dados.get("saldo", 0.0)
+        if conta.__limite < 0 or saldo < -conta.__limite - 0.005:
+            raise ValueError(f"Conta {conta.numero}: saldo abaixo do limite permitido.")
+        conta.__saldo = saldo
         conta.__tentativas_falhas = dados.get("tentativas_falhas", 0)
         conta.__bloqueada = dados.get("bloqueada", False)
-        conta.__fatura_cartao_credito = dados.get("fatura_cartao_credito", 0.0)
         conta.__divida_emprestimo = dados.get("divida_emprestimo", 0.0)
         conta.__bytepoints = dados.get("bytepoints", 0.0)
         conta.__cofrinhos = {nome: dict(info) for nome, info in dados.get("cofrinhos", {}).items()}
         conta.__historico = [Transacao.de_dicionario(t) for t in dados.get("historico", [])]
         conta.__consentimentos = {c: Consentimento.de_dicionario(v)
                                 for c, v in dados.get("consentimentos", {}).items()}
+        conta.__cartao = ContaCorrente.__reconstruir_cartao(dados, cliente,
+                                                            conta.__historico)
         return conta
+
+    @staticmethod
+    def __reconstruir_cartao(dados, cliente, historico):
+        """Recria o cartão a partir do arquivo.
+
+        Arquivos de antes da classe CartaoDeCredito só têm o limite e a fatura.
+        Nesse caso o cartão é criado com número novo, e o total já pago é
+        reconstruído a partir do extrato — cada PAGAMENTO_FATURA que ainda
+        está no histórico foi pago e não estornado. Sem isso, o estorno de um
+        pagamento antigo seria recusado pelo cartão.
+        """
+        if "cartao" in dados:
+            return CartaoDeCredito.de_dicionario(dados["cartao"])
+        total_pago = sum(t.valor for t in historico if t.tipo == "PAGAMENTO_FATURA")
+        return CartaoDeCredito.de_dicionario({
+            "nome": cliente.nome,
+            "limite": dados.get("limite_cartao_credito", 0.0),
+            "saldo": dados.get("fatura_cartao_credito", 0.0),
+            "total_pago": total_pago,
+        })
 
     def __repr__(self):
         return f"ContaCorrente({self.numero}, {self.titular}, {formatar_reais(self.__saldo)})"

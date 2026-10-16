@@ -223,12 +223,14 @@ class Interface:
             print("[6] Refazer Transação Estornada")
             print("[7] Histórico de Operações")
             print("[8] Relatório de Gastos por Categoria")
+            print("[9] Consultar Limite da Conta")
+            print("[10] Aumentar Limite da Conta")
             print("[0] Voltar")
             print(linha_separadora())
 
             match self.pedir_texto("Escolha uma opção: "):
                 case "1":
-                    self.mostrar(conta.resumo_saldo())
+                    self.mostrar(conta.consultar_saldo())
                 case "2":
                     valor = self.pedir_valor()
                     _, mensagem = self.__banco.executar(conta, conta.depositar, valor)
@@ -251,6 +253,12 @@ class Interface:
                 case "8":
                     dias = self.pedir_periodo()
                     self.mostrar(conta.relatorio_gastos(dias))
+                case "9":
+                    self.mostrar(conta.consultar_limite())
+                case "10":
+                    valor = self.pedir_valor()
+                    _, mensagem = self.__banco.executar(conta, conta.aumentar_limite, valor)
+                    self.mostrar(mensagem)
                 case "0":
                     return
                 case _:
@@ -366,6 +374,9 @@ class Interface:
             print("[1] Consultar Limite e Fatura")
             print("[2] Comprar no Cartão de Crédito")
             print("[3] Pagar Fatura")
+            print("[4] Simular Parcelamento da Fatura")
+            print("[5] Parcelar Fatura")
+            print("[6] Dados do Cartão")
             print("[0] Voltar")
             print(linha_separadora())
 
@@ -382,6 +393,16 @@ class Interface:
                     valor = self.pedir_valor()
                     _, mensagem = self.__banco.executar(conta, conta.pagar_fatura, valor)
                     self.mostrar(mensagem)
+                case "4":
+                    parcelas = self.pedir_inteiro("Em quantas parcelas? ")
+                    _, mensagem = conta.simular_parcelamento_fatura(parcelas)
+                    self.mostrar(mensagem)
+                case "5":
+                    parcelas = self.pedir_inteiro("Em quantas parcelas? ")
+                    _, mensagem = self.__banco.executar(conta, conta.parcelar_fatura, parcelas)
+                    self.mostrar(mensagem)
+                case "6":
+                    self.mostrar(conta.dados_cartao())
                 case "0":
                     return
                 case _:
@@ -572,6 +593,7 @@ class Interface:
             print("[1] Cadastrar Nova Conta")
             print("[2] Alterar meu PIN")
             print("[3] Trocar de Conta")
+            print("[4] Meus Dados de Contato")
             print("[0] Voltar")
             print(linha_separadora())
 
@@ -595,6 +617,8 @@ class Interface:
                     self.mostrar(mensagem)
                 case "3":
                     return "trocar"
+                case "4":
+                    self.mostrar(conta.cliente.consultar_contatos())
                 case "0":
                     return None
                 case _:

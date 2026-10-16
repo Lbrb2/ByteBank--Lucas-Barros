@@ -23,7 +23,16 @@ def formatar_numero(valor):
 
 
 def formatar_reais(valor):
-    """Formata um valor em reais: 1250.5 -> R$ 1.250,50"""
+    """Formata um valor em reais: 1250.5 -> R$ 1.250,50 | -200 -> -R$ 200,00
+
+    O sinal vem antes do símbolo, como no padrão brasileiro. Valores
+    negativos aparecem quando a conta usa o limite (cheque especial).
+    """
+    # Arredonda antes de decidir o sinal: -0.004 é zero, não negativo. O
+    # "+ 0.0" transforma o -0.0 que o arredondamento gera em 0.0.
+    valor = round(valor, 2) + 0.0
+    if valor < 0:
+        return f"-R$ {formatar_numero(-valor)}"
     return f"R$ {formatar_numero(valor)}"
 
 

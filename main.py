@@ -26,21 +26,21 @@ def carregar_contas_ficticias(banco):
 
     banco.adicionar_conta(ContaCorrente(
         numero="0001", cliente=amanda,
-        chave_pix="amanda@email.com", pin="1111", saldo=1000.00,
+        chave_pix="amanda@email.com", pin="1111", saldo=1000.00, limite=500.00,
         limite_cartao_credito=4000.00,
         saldo_dolar=200.00, saldo_euro=150.00, saldo_yuan=1000.00,
         cofrinhos_iniciais={"Reserva": (5000.00, 0.005), "Viagem": (1200.00, 0.007)}
     ))
     banco.adicionar_conta(ContaCorrente(
         numero="0002", cliente=caio,
-        chave_pix="caio@email.com", pin="2222", saldo=2500.50,
+        chave_pix="caio@email.com", pin="2222", saldo=2500.50, limite=1000.00,
         limite_cartao_credito=2500.00,
         saldo_dolar=300.00, saldo_euro=200.00, saldo_yuan=1500.00,
         cofrinhos_iniciais={"Reserva": (3000.00, 0.005)}
     ))
     banco.adicionar_conta(ContaCorrente(
         numero="0003", cliente=douglas,
-        chave_pix="douglas@email.com", pin="3333", saldo=320.00,
+        chave_pix="douglas@email.com", pin="3333", saldo=320.00, limite=300.00,
         limite_cartao_credito=3000.00,
         saldo_dolar=100.00, saldo_euro=80.00, saldo_yuan=500.00,
         cofrinhos_iniciais={"Emergência": (1000.00, 0.006)}

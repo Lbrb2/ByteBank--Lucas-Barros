@@ -29,9 +29,9 @@ no boot.
 
 | Requisito do enunciado | Onde foi implementado |
 |---|---|
-| Função `salvar_contas_txt(contas)` | `persistencia_txt.py`, linha 206 |
+| Função `salvar_contas_txt(contas)` | `persistencia_txt.py`, linha 254 |
 | Executada automaticamente ao encerrar o sistema | `main.py` → `encerrar()` → `Banco.salvar_estado()`, chamada no `finally` do `main()` |
-| Função `carregar_contas_txt()` | `persistencia_txt.py`, linha 253 |
+| Função `carregar_contas_txt()` | `persistencia_txt.py`, linha 301 |
 | Executada no boot para restaurar os saldos | `main.py` → `dar_boot()` → `Banco.carregar_estado()`, primeira leitura |
 | Gravação em arquivo `.txt` | `contas.txt`, formato CSV |
 
@@ -49,25 +49,28 @@ são manuais, exatamente como a aula apresenta:
 | `arquivo.write()` | Uma linha por conta, com `\n` ao final |
 | `for linha in arquivo` | Leitura **preguiçosa**, uma linha por vez, em vez de `readlines()` |
 | `.strip()` | Remove o `\n` e espaços de cada linha e de cada campo |
-| `.split(',')` | Separa a linha nos 19 campos |
+| `.split(',')` | Separa a linha nos 28 campos |
 | `FileNotFoundError` | Primeira execução: tratada como situação normal, não como erro |
 
 ## Formato do arquivo
 
-Uma conta por linha, 19 campos separados por vírgula:
+Uma conta por linha, 28 campos separados por vírgula:
 
 ```
-# numero,titular,cpf,email,telefone,chave_pix,salt,pin_hash,bloqueada,tentativas,saldo,limite_cartao,fatura_cartao,divida_emprestimo,dolar,euro,yuan,bytepoints,cofrinhos
-0001,Amanda Silva,111.111.111-11,amanda@email.com,(81) 98888-1111,amanda@email.com,4f1a0b5c...,b305b3e1...,False,0,1000.00,4000.00,0.00,0.00,200.00,150.00,1000.00,0.00,Reserva:5000.00:0.005000;Viagem:1200.00:0.007000
+# numero,titular,cpf,email,telefone,chave_pix,salt,pin_hash,bloqueada,tentativas,saldo,limite,limite_cartao,fatura_cartao,cartao_numero,cartao_validade,cartao_dia_pagamento,cartao_salt_cvv,cartao_hash_cvv,cartao_total_pago,cartao_parcelas,cartao_valor_parcela,divida_emprestimo,dolar,euro,yuan,bytepoints,cofrinhos
+0001,Amanda Silva,111.111.111-11,amanda@email.com,(81) 98888-1111,amanda@email.com,4f1a0b5c...,b305b3e1...,False,0,1000.00,500.00,4000.00,0.00,5123...4535,10/31,10,9c2e...,71af...,0.00,0,0.000000,0.00,200.00,150.00,1000.00,0.00,Reserva:5000.00:0.005000;Viagem:1200.00:0.007000
 ```
 
 A ordem das colunas é definida uma única vez (lista `COLUNAS`) e usada tanto na
 gravação quanto na leitura. Na leitura, `zip(COLUNAS, campos)` junta cada nome
 ao seu valor, então o código lê `bruto["saldo"]` em vez de `campos[10]`.
 
-Um `contas.txt` gravado pela versão anterior, com 17 campos (sem e-mail e
-telefone), continua sendo lido: o número de campos identifica o formato. Na
-próxima gravação ele já sai no formato novo.
+As colunas `cartao_*` guardam o `CartaoDeCredito` da conta; o CVV, como o PIN,
+só vai para o arquivo como hash.
+
+Arquivos de versões anteriores continuam sendo lidos — o número de campos
+identifica o formato: 27 campos (antes do limite da conta), 19 (antes da
+classe `CartaoDeCredito`) ou 17 (antes da classe `Cliente`). Na próxima gravação, eles já saem no formato novo.
 
 A primeira linha começa com `#` e documenta as colunas. O leitor ignora linhas
 que começam com `#`, o que permite comentar o arquivo sem quebrá-lo — uma
@@ -89,7 +92,7 @@ A leitura é um `split(';')` seguido de um `split(':')` em cada pedaço.
 
 ### Por que os textos são "limpos" antes de gravar
 
-Um titular chamado `Silva, Jr.` geraria uma linha com 20 campos em vez de 19, e
+Um titular chamado `Silva, Jr.` geraria uma linha com 29 campos em vez de 28, e
 a conta seria perdida na próxima leitura. A função `limpar_texto()` troca por
 espaço qualquer caractere que sirva de separador (`,` `;` `:` `\n` `\r`) antes
 de a linha ser montada. É a limitação honesta do CSV manual: quem usa vírgula

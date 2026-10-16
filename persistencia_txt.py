@@ -8,8 +8,13 @@ serialização é usada aqui: a montagem e a quebra de cada linha são manuais.
 Formato de 'contas.txt' — uma conta por linha, campos separados por vírgula:
 
     numero,titular,cpf,email,telefone,chave_pix,salt,pin_hash,bloqueada,
-    tentativas,saldo,limite_cartao,fatura_cartao,divida_emprestimo,
-    dolar,euro,yuan,bytepoints,cofrinhos
+    tentativas,saldo,limite,limite_cartao,fatura_cartao,
+    cartao_numero,cartao_validade,cartao_dia_pagamento,cartao_salt_cvv,
+    cartao_hash_cvv,cartao_total_pago,cartao_parcelas,cartao_valor_parcela,
+    divida_emprestimo,dolar,euro,yuan,bytepoints,cofrinhos
+
+As colunas 'cartao_*' guardam o CartaoDeCredito da conta. O CVV, como o PIN,
+só é gravado em forma de hash.
 
 O último campo guarda os cofrinhos, que são um dicionário aninhado. Como um
 arquivo CSV é plano, eles recebem separadores próprios:
@@ -49,12 +54,27 @@ MARCA_DE_COMENTARIO = "#"
 COLUNAS = [
     "numero", "titular", "cpf", "email", "telefone", "chave_pix",
     "salt", "pin_hash", "bloqueada", "tentativas",
+    "saldo", "limite", "limite_cartao", "fatura_cartao",
+    "cartao_numero", "cartao_validade", "cartao_dia_pagamento", "cartao_salt_cvv",
+    "cartao_hash_cvv", "cartao_total_pago", "cartao_parcelas", "cartao_valor_parcela",
+    "divida_emprestimo", "dolar", "euro", "yuan", "bytepoints", "cofrinhos",
+]
+
+# Formatos gravados por versões anteriores. Continuam sendo lidos para que um
+# contas.txt antigo não seja perdido; na próxima gravação, ele sai no novo.
+
+# Antes do limite da conta corrente (sem a coluna limite)
+COLUNAS_SEM_LIMITE = [coluna for coluna in COLUNAS if coluna != "limite"]
+
+# Antes da classe CartaoDeCredito (sem as colunas cartao_*)
+COLUNAS_SEM_CARTAO = [
+    "numero", "titular", "cpf", "email", "telefone", "chave_pix",
+    "salt", "pin_hash", "bloqueada", "tentativas",
     "saldo", "limite_cartao", "fatura_cartao", "divida_emprestimo",
     "dolar", "euro", "yuan", "bytepoints", "cofrinhos",
 ]
 
-# Formato gravado antes da classe Cliente existir (sem e-mail e telefone).
-# Continua sendo lido para que um contas.txt antigo não seja perdido.
+# Antes da classe Cliente (sem e-mail e telefone)
 COLUNAS_VERSAO_ANTERIOR = [
     "numero", "titular", "cpf", "chave_pix",
     "salt", "pin_hash", "bloqueada", "tentativas",
@@ -66,6 +86,8 @@ COLUNAS_VERSAO_ANTERIOR = [
 # quantidade está corrompida e é ignorada.
 FORMATOS_POR_QUANTIDADE = {
     len(COLUNAS): COLUNAS,
+    len(COLUNAS_SEM_LIMITE): COLUNAS_SEM_LIMITE,
+    len(COLUNAS_SEM_CARTAO): COLUNAS_SEM_CARTAO,
     len(COLUNAS_VERSAO_ANTERIOR): COLUNAS_VERSAO_ANTERIOR,
 }
 
@@ -128,6 +150,7 @@ def montar_linha(conta):
     """Monta a linha de texto que representa uma conta."""
     dados = conta.para_dicionario()
     cliente = dados["cliente"]
+    cartao = dados["cartao"]
 
     valores = {
         "numero": limpar_texto(dados["numero"]),
@@ -141,8 +164,18 @@ def montar_linha(conta):
         "bloqueada": str(dados["bloqueada"]),
         "tentativas": str(dados["tentativas_falhas"]),
         "saldo": f"{dados['saldo']:.2f}",
-        "limite_cartao": f"{dados['limite_cartao_credito']:.2f}",
-        "fatura_cartao": f"{dados['fatura_cartao_credito']:.2f}",
+        "limite": f"{dados['limite']:.2f}",
+        "limite_cartao": f"{cartao['limite']:.2f}",
+        "fatura_cartao": f"{cartao['saldo']:.2f}",
+        "cartao_numero": cartao["numero"],
+        "cartao_validade": cartao["validade"],
+        "cartao_dia_pagamento": str(cartao["data_pagamento"]),
+        "cartao_salt_cvv": cartao["salt_cvv"],
+        "cartao_hash_cvv": cartao["hash_cvv"],
+        "cartao_total_pago": f"{cartao['total_pago']:.2f}",
+        "cartao_parcelas": str(cartao["parcelas"]),
+        # Com mais casas: a parcela vezes a quantidade precisa bater com o total
+        "cartao_valor_parcela": f"{cartao['valor_parcela']:.6f}",
         "divida_emprestimo": f"{dados['divida_emprestimo']:.2f}",
         "dolar": f"{dados['saldo_dolar']:.2f}",
         "euro": f"{dados['saldo_euro']:.2f}",
@@ -187,6 +220,7 @@ def ler_linha(linha):
             "bloqueada": bruto["bloqueada"] == "True",
             "tentativas_falhas": int(bruto["tentativas"]),
             "saldo": float(bruto["saldo"]),
+            "limite": float(bruto.get("limite", "0")),
             "limite_cartao_credito": float(bruto["limite_cartao"]),
             "fatura_cartao_credito": float(bruto["fatura_cartao"]),
             "divida_emprestimo": float(bruto["divida_emprestimo"]),
@@ -196,6 +230,20 @@ def ler_linha(linha):
             "bytepoints": float(bruto["bytepoints"]),
             "cofrinhos": ler_cofrinhos(bruto["cofrinhos"]),
         }
+        if "cartao_numero" in bruto:
+            dados["cartao"] = {
+                "nome": bruto["titular"],
+                "numero": bruto["cartao_numero"],
+                "validade": bruto["cartao_validade"],
+                "data_pagamento": int(bruto["cartao_dia_pagamento"]),
+                "salt_cvv": bruto["cartao_salt_cvv"],
+                "hash_cvv": bruto["cartao_hash_cvv"],
+                "limite": float(bruto["limite_cartao"]),
+                "saldo": float(bruto["fatura_cartao"]),
+                "total_pago": float(bruto["cartao_total_pago"]),
+                "parcelas": int(bruto["cartao_parcelas"]),
+                "valor_parcela": float(bruto["cartao_valor_parcela"]),
+            }
         # A própria classe se reconstrói e valida (CPF, saldo não negativo)
         return ContaCorrente.de_dicionario(dados)
     except (ValueError, TypeError):
