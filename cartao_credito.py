@@ -1,6 +1,5 @@
 """Classe que representa o cartão de crédito de uma conta.
 
-Exercício 3 da Aula 8 — Classe Cartão de Crédito:
 
     atributos: nome, numero, validade, CVV, limite, data_pagamento, saldo, outros
     métodos:   consultar_limite(), pagar(), parcelar_saldo(), consultar_saldo()
